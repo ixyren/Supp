@@ -24,4 +24,10 @@ dist-ssr
 *.sw?
 dist/
 dist-electron/
+dist-release/
 node_modules/
+src-tauri/target/
+Supp_Rust.exe
+Supp_Portable.exe
+out.txt
+/GoogleSans-*.ttf

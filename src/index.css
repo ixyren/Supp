@@ -1,23 +1,86 @@
 @import "tailwindcss";
 
+@font-face {
+  font-family: 'Google Sans';
+  src: url('/fonts/GoogleSans-Variable.ttf') format('truetype-variations'),
+       url('/fonts/GoogleSans-Variable.ttf') format('truetype');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Google Sans';
+  src: url('/fonts/GoogleSans-Italic-Variable.ttf') format('truetype-variations'),
+       url('/fonts/GoogleSans-Italic-Variable.ttf') format('truetype');
+  font-weight: 100 900;
+  font-style: italic;
+  font-display: swap;
+}
+
 @theme {
-  --color-supp-dark: #0a0a0a;
-  --color-supp-sidebar: #121212;
-  --color-supp-accent: #39ff14;
-  --font-sans: "Inter", sans-serif;
+  --font-sans: 'Google Sans', system-ui, -apple-system, sans-serif;
+  --font-display: 'Google Sans', system-ui, -apple-system, sans-serif;
+
+  /* Material You 3 Expressive Dark-Lime Palette */
+  --color-m3-primary: #c6ff00;
+  --color-m3-primary-hover: #d8ff59;
+  --color-m3-on-primary: #182900;
+  --color-m3-primary-container: #2a3e00;
+  --color-m3-on-primary-container: #d8ff70;
+
+  --color-m3-surface-lowest: #0d1009;
+  --color-m3-surface: #12150e;
+  --color-m3-surface-dim: #0c0e09;
+  --color-m3-surface-container: #181c13;
+  --color-m3-surface-container-high: #21271a;
+  --color-m3-surface-container-highest: #2b3222;
+  --color-m3-surface-variant: #242a1c;
+
+  --color-m3-on-surface: #e7ebdc;
+  --color-m3-on-surface-variant: #a2a895;
+  --color-m3-on-surface-muted: #737a67;
+
+  --color-m3-outline: #474e3b;
+  --color-m3-outline-variant: #2c3323;
+
+  /* Legacy color aliases mapped to M3 Lime */
+  --color-supp-dark: #12150e;
+  --color-supp-sidebar: #181c13;
+  --color-supp-accent: #c6ff00;
 }
 
 @layer base {
-  body {
-    @apply bg-supp-dark text-white font-sans overflow-hidden h-screen w-screen m-0 p-0;
+  * {
+    font-family: 'Google Sans', system-ui, -apple-system, sans-serif;
+    box-sizing: border-box;
+  }
+
+  html,
+  body,
+  #root {
+    background-color: var(--color-m3-surface);
+    color: var(--color-m3-on-surface);
+    overflow: hidden;
+    height: 100vh;
+    width: 100vw;
+    margin: 0;
+    padding: 0;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
 }
 
 @layer utilities {
+  /* Scrollbar for dashboard and bento views */
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(198, 255, 0, 0.22) transparent;
+  }
 
-  /* Custom scrollbar styles */
   .scrollbar-thin::-webkit-scrollbar {
     width: 6px;
+    height: 6px;
   }
 
   .scrollbar-thin::-webkit-scrollbar-track {
@@ -25,19 +88,55 @@
   }
 
   .scrollbar-thin::-webkit-scrollbar-thumb {
-    background-color: #374151;
-    border-radius: 3px;
+    background-color: rgba(198, 255, 0, 0.2);
+    border-radius: 9999px;
   }
 
   .scrollbar-thin::-webkit-scrollbar-thumb:hover {
-    background-color: #4b5563;
+    background-color: rgba(198, 255, 0, 0.4);
   }
 
-  .scrollbar-thumb-gray-700::-webkit-scrollbar-thumb {
-    background-color: #374151;
+  /* Ultra-slim rail scrollbar that never crowds the 80px collapsed rail */
+  .scrollbar-rail-collapsed {
+    scrollbar-width: none;
   }
 
-  .scrollbar-track-transparent::-webkit-scrollbar-track {
+  .scrollbar-rail-collapsed::-webkit-scrollbar {
+    width: 0px;
+  }
+
+  .scrollbar-rail-expanded {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(198, 255, 0, 0.22) transparent;
+  }
+
+  .scrollbar-rail-expanded::-webkit-scrollbar {
+    width: 4px;
+  }
+
+  .scrollbar-rail-expanded::-webkit-scrollbar-track {
     background: transparent;
+  }
+
+  .scrollbar-rail-expanded::-webkit-scrollbar-thumb {
+    background-color: transparent;
+    border-radius: 9999px;
+  }
+
+  .scrollbar-rail-expanded:hover::-webkit-scrollbar-thumb {
+    background-color: rgba(198, 255, 0, 0.28);
+  }
+
+  /* Subtle luminous M3 elevation surfaces */
+  .m3-elevation-1 {
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  }
+
+  .m3-elevation-2 {
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  }
+
+  .m3-elevation-3 {
+    box-shadow: 0 14px 36px rgba(0, 0, 0, 0.56), inset 0 1px 0 rgba(255, 255, 255, 0.05);
   }
 }

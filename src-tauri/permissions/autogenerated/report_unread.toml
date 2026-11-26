@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-report-unread"
+description = "Enables the report_unread command without any pre-configured scope."
+commands.allow = ["report_unread"]
+
+[[permission]]
+identifier = "deny-report-unread"
+description = "Denies the report_unread command without any pre-configured scope."
+commands.deny = ["report_unread"]

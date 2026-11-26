@@ -1,564 +1,1036 @@
-// Updated App.jsx with fixed sidebar heights, AnimatePresence wrapper, and main.js menu bar removal
-import React, { useState, useEffect, useRef } from 'react';
-import { MessageSquare, Settings, Plus, Trash2, AlertTriangle, CheckCircle, Pencil } from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { motion as Motion, AnimatePresence } from 'framer-motion';
+import { Bridge } from './bridge';
+import { EASE_EMPHASIZED, DEFAULT_AVATAR } from './components/motionTokens';
+import { IntroScreen } from './components/IntroScreen';
+import { SidebarRail } from './components/SidebarRail';
+import { PreferencesPanel } from './components/PreferencesPanel';
+import { SessionWebview } from './components/SessionWebview';
+import { SessionContextMenu } from './components/SessionContextMenu';
+import { DeleteSessionModal } from './components/DeleteSessionModal';
+import { ToastPill } from './components/ToastPill';
 
-// Default avatar for new sessions
-const DEFAULT_AVATAR = 'https://cdn.pixabay.com/photo/2015/10/05/22/37/blank-profile-picture-973460_1280.png';
-
-// Sidebar animation variants
-const sidebarVariants = {
-  open: {
-    width: '18rem',
-    transition: { type: 'spring', stiffness: 300, damping: 30 }
-  },
-  closed: {
-    width: '5rem',
-    transition: { type: 'spring', stiffness: 300, damping: 30, delay: 0.1 }
+function loadSavedInstances() {
+  const saved = localStorage.getItem('whatsapp_instances');
+  if (!saved) return [];
+  try {
+    const parsed = JSON.parse(saved);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map((s) => ({
+      ...s,
+      avatar: s.avatar || DEFAULT_AVATAR,
+      isReady: Boolean(s.isReady ?? !Bridge.isTauri()),
+      hasError: false,
+      errorMsg: null,
+    }));
+  } catch (e) {
+    console.error('Error parsing saved instances:', e);
+    return [];
   }
-};
-
-// Text animation for sidebar open/close (wrapper)
-const textWrapperVariants = {
-  open: { opacity: 1, width: 'auto', transition: { duration: 0.2 } },
-  closed: { opacity: 0, width: 0, transition: { duration: 0.1 } }
-};
-
-// Text animation variants for individual elements
-const textVariants = {
-  visible: {
-    opacity: 1,
-    width: 'auto',
-    transition: { duration: 0.3, delay: 0.1, ease: 'easeOut' }
-  },
-  hidden: {
-    opacity: 0,
-    width: 0,
-    transition: { duration: 0.1, ease: 'easeIn' }
-  }
-};
-
-// SessionWebview Component - Handles Electron webview events properly
-function SessionWebview({ session, isActive, onReady, onUpdateSession, onLoadFail, animationVariants }) {
-  const webviewRef = useRef(null);
-
-  useEffect(() => {
-    const webview = webviewRef.current;
-    if (!webview) return;
-
-    const handleDomReady = () => {
-      if (!session.isReady) {
-        onReady(session.id);
-      }
-    };
-
-    const handleTitleUpdate = () => {
-      try {
-        const title = webview.getTitle();
-        const match = title.match(/^\((\d+)\)/);
-        const unreadCount = match ? parseInt(match[1], 10) : 0;
-        onUpdateSession(session.id, {
-          unread: unreadCount,
-          // Keep existing name unless title is a custom name
-          name: (unreadCount === 0 && title !== 'WhatsApp' && title !== 'WhatsApp Web') ? title : session.name
-        });
-      } catch (e) { console.error(e); }
-    };
-
-    const handleFailLoad = (e) => {
-      if (e.isMainFrame && e.errorCode !== -3) {
-        onLoadFail(session.id, e.errorDescription);
-      }
-    };
-
-    webview.addEventListener('dom-ready', handleDomReady);
-    webview.addEventListener('page-title-updated', handleTitleUpdate);
-    webview.addEventListener('did-fail-load', handleFailLoad);
-
-    const failsafeTimeout = setTimeout(() => {
-      if (!session.isReady) {
-        console.warn(`Failsafe timeout for ${session.id}`);
-        onReady(session.id);
-      }
-    }, 15000);
-
-    const avatarInterval = setInterval(() => {
-      if (session.isReady) {
-        webview.executeJavaScript(`
-          (function(){
-            const img = document.querySelector('header img');
-            return img ? img.src : null;
-          })();
-        `).then(src => {
-          if (src && src !== session.avatar) {
-            onUpdateSession(session.id, { avatar: src });
-          }
-        }).catch(() => { });
-      }
-    }, 5000);
-
-    return () => {
-      clearTimeout(failsafeTimeout);
-      clearInterval(avatarInterval);
-      webview.removeEventListener('dom-ready', handleDomReady);
-      webview.removeEventListener('page-title-updated', handleTitleUpdate);
-      webview.removeEventListener('did-fail-load', handleFailLoad);
-    };
-  }, [session.id, session.isReady, session.avatar, onReady, onUpdateSession, onLoadFail]);
-
-  return (
-    <motion.div
-      animate={animationVariants}
-      className={`absolute inset-0 w-full h-full transition-opacity duration-300 ${isActive ? 'opacity-100' : 'opacity-0'}`}
-      style={{ pointerEvents: isActive ? 'auto' : 'none' }}
-    >
-      <webview
-        ref={webviewRef}
-        src="https://web.whatsapp.com"
-        partition={`persist:whatsapp_${session.id}`}
-        allowpopups="true"
-        webpreferences="contextIsolation=no"
-        useragent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        className="w-full h-full"
-      />
-    </motion.div>
-  );
 }
 
-// Toggle Component
-const Toggle = ({ active, onClick }) => (
-  <div
-    onClick={onClick}
-    className={`w-12 h-6 rounded-full cursor-pointer transition-colors duration-300 relative ${active ? 'bg-[#39ff14]' : 'bg-gray-600'}`}
-  >
-    <motion.div
-      layout
-      className={`absolute top-1 w-4 h-4 rounded-full bg-white shadow-sm ${active ? 'right-1' : 'left-1'}`}
-    />
-  </div>
-);
-
-// PreferencesPanel Component
-const PreferencesPanel = ({ settings, toggleSetting }) => {
-  return (
-    <motion.div
-      initial={{ opacity: 0, scale: 0.95 }}
-      animate={{ opacity: 1, scale: 1 }}
-      exit={{ opacity: 0, scale: 0.95 }}
-      transition={{ duration: 0.3, ease: "easeOut" }}
-      className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-[#0a0a0a] text-white"
-    >
-      {/* Background Gradient */}
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(57,255,20,0.08)_0%,transparent_70%)] pointer-events-none" />
-
-      {/* Header */}
-      <div className="flex flex-col items-center mb-12 z-10">
-        <div className="mb-4">
-          <Settings size={64} className="text-[#39ff14]" strokeWidth={1.5} />
-        </div>
-        <h2 className="text-2xl font-bold mb-1">Preferencias del Sistema</h2>
-        <p className="text-gray-500">Configuración de inicio y comportamiento</p>
-      </div>
-
-      {/* Options Grid */}
-      <motion.div
-        variants={{ show: { transition: { staggerChildren: 0.1 } } }}
-        initial="hidden"
-        animate="show"
-        className="max-w-2xl w-full space-y-4 z-10 px-6"
-      >
-        {/* Toggle 1 */}
-        <motion.div
-          variants={{ hidden: { opacity: 0, x: -20 }, show: { opacity: 1, x: 0 } }}
-          whileHover={{ scale: 1.02 }}
-          className="bg-[#151515] border border-white/5 rounded-xl p-5 flex items-center justify-between hover:border-white/10 transition-colors cursor-pointer"
-        >
-          <div className="pr-4">
-            <h3 className="font-medium text-white text-lg">Iniciar con Windows</h3>
-            <p className="text-sm text-gray-400 mt-1">La aplicación se iniciará automáticamente al encender el sistema</p>
-          </div>
-          <Toggle
-            active={settings.openAtLogin}
-            onClick={() => toggleSetting('startWithWindows', !settings.openAtLogin)}
-          />
-        </motion.div>
-
-        {/* Toggle 2 */}
-        <motion.div
-          variants={{ hidden: { opacity: 0, x: -20 }, show: { opacity: 1, x: 0 } }}
-          whileHover={{ scale: 1.02 }}
-          className="bg-[#151515] border border-white/5 rounded-xl p-5 flex items-center justify-between hover:border-white/10 transition-colors cursor-pointer"
-        >
-          <div className="pr-4">
-            <h3 className="font-medium text-white text-lg">Iniciar minimizado en la bandeja del sistema</h3>
-            <p className="text-sm text-gray-400 mt-1">La aplicación se iniciará oculta en la bandeja de notificaciones</p>
-          </div>
-          <Toggle
-            active={settings.startMinimized}
-            onClick={() => toggleSetting('startMinimized', !settings.startMinimized)}
-          />
-        </motion.div>
-
-        {/* Toggle 3 */}
-        <motion.div
-          variants={{ hidden: { opacity: 0, x: -20 }, show: { opacity: 1, x: 0 } }}
-          whileHover={{ scale: 1.02 }}
-          className="bg-[#151515] border border-white/5 rounded-xl p-5 flex items-center justify-between hover:border-white/10 transition-colors cursor-pointer"
-        >
-          <div className="pr-4">
-            <h3 className="font-medium text-white text-lg">Botón cerrar minimiza a la bandeja</h3>
-            <p className="text-sm text-gray-400 mt-1">Al cerrar la ventana, la aplicación permanecerá en la bandeja del sistema</p>
-          </div>
-          <Toggle
-            active={settings.closeToTray}
-            onClick={() => toggleSetting('closeToTray', !settings.closeToTray)}
-          />
-        </motion.div>
-      </motion.div>
-
-      {/* Footer */}
-      <div className="mt-auto mb-10 text-gray-500 text-sm z-10">
-        Supp by Javier Medina
-      </div>
-    </motion.div>
-  );
-};
+function getNextSessionNumber(currentInstances) {
+  let maxNum = 0;
+  for (const inst of currentInstances) {
+    const match = typeof inst.name === 'string' && inst.name.match(/^Sesión\s+(\d+)$/i);
+    if (match) {
+      const n = parseInt(match[1], 10);
+      if (n > maxNum) maxNum = n;
+    }
+  }
+  return Math.max(maxNum + 1, currentInstances.length + 1);
+}
 
 function App() {
-  // Load instances from localStorage or start empty
-  const [instances, setInstances] = useState(() => {
-    const saved = localStorage.getItem('whatsapp_instances');
-    return saved ? JSON.parse(saved) : [];
+  const [instances, setInstances] = useState(loadSavedInstances);
+  const [activeTab, setActiveTab] = useState(() =>
+    instances.length > 0 ? instances[0].id : 'settings'
+  );
+  const [sidebarHovered, setSidebarHovered] = useState(false);
+  const [hoverExpandEnabled, setHoverExpandEnabled] = useState(() => {
+    const saved = localStorage.getItem('hover_expand_enabled');
+    return saved !== null ? saved === 'true' : true;
   });
 
-  const [activeTab, setActiveTab] = useState(instances.length > 0 ? instances[0].id : 'settings');
-  const [sidebarHovered, setSidebarHovered] = useState(false);
+  // Startup / staggered Intro Screen state
+  const [introVisible, setIntroVisible] = useState(true);
+  const [introExiting, setIntroExiting] = useState(false);
+  const [startedSessionIds, setStartedSessionIds] = useState(() => new Set());
+  const [readySessionIds, setReadySessionIds] = useState(() => new Set());
+  const [introSubProgress, setIntroSubProgress] = useState(0);
+  const [allInitialSessionsReady, setAllInitialSessionsReady] = useState(false);
 
-  const previousTabRef = useRef(activeTab);
-
-  const [deleteModal, setDeleteModal] = useState(null);
-  const [notification, setNotification] = useState(null);
-
+  // Interactive UI states
+  const contextMenuRef = useRef(null);
+  const [contextMenu, setContextMenu] = useState(null);
+  const [panelTemporarilyOpen, setPanelTemporarilyOpen] = useState(false);
+  const [deletingSessionId, setDeletingSessionId] = useState(null);
   const [editingSession, setEditingSession] = useState(null);
   const [editingName, setEditingName] = useState('');
+  const [isAddingSession, setIsAddingSession] = useState(false);
+  const [isDraggingSession, setIsDraggingSession] = useState(false);
+  const [slideDirection, setSlideDirection] = useState(0);
+  const [notification, setNotification] = useState(null);
 
-  const [startWithWindows, setStartWithWindows] = useState(() => {
-    const saved = localStorage.getItem('startWithWindows');
-    return saved === 'true';
-  });
-  const [startMinimized, setStartMinimized] = useState(() => {
-    const saved = localStorage.getItem('startMinimized');
-    return saved === 'true';
-  });
+  // System settings state
+  const [startWithWindows, setStartWithWindows] = useState(
+    () => localStorage.getItem('startWithWindows') === 'true'
+  );
+  const [startMinimized, setStartMinimized] = useState(
+    () => localStorage.getItem('startMinimized') === 'true'
+  );
   const [closeToTray, setCloseToTray] = useState(() => {
     const saved = localStorage.getItem('closeToTray');
     return saved !== null ? saved === 'true' : true;
   });
 
-  // Save to localStorage
+  const isSidebarExpanded =
+    (sidebarHovered && (hoverExpandEnabled || panelTemporarilyOpen)) ||
+    Boolean(contextMenu) ||
+    Boolean(editingSession) ||
+    Boolean(deletingSessionId) ||
+    isDraggingSession;
+
+  // Refs to eliminate stale closures & StrictMode side effects inside updaters
+  const instancesRef = useRef(instances);
+  const activeTabRef = useRef(activeTab);
+  const introVisibleRef = useRef(introVisible);
+  const isSidebarExpandedRef = useRef(isSidebarExpanded);
+  const hoverExpandEnabledRef = useRef(hoverExpandEnabled);
+  const editingSessionRef = useRef(editingSession);
+  const deletingSessionRef = useRef(deletingSessionId);
+  const isDraggingSessionRef = useRef(isDraggingSession);
+  const isAddingSessionRef = useRef(isAddingSession);
+  const introExitStartedRef = useRef(false);
+  const introFinishedSentRef = useRef(false);
+
+  useEffect(() => {
+    instancesRef.current = instances;
+  }, [instances]);
+
+  useEffect(() => {
+    activeTabRef.current = activeTab;
+  }, [activeTab]);
+
+  useEffect(() => {
+    introVisibleRef.current = introVisible;
+  }, [introVisible]);
+
+  useEffect(() => {
+    isSidebarExpandedRef.current = isSidebarExpanded;
+  }, [isSidebarExpanded]);
+
+  useEffect(() => {
+    hoverExpandEnabledRef.current = hoverExpandEnabled;
+  }, [hoverExpandEnabled]);
+
+  useEffect(() => {
+    editingSessionRef.current = editingSession;
+  }, [editingSession]);
+
+  useEffect(() => {
+    deletingSessionRef.current = deletingSessionId;
+  }, [deletingSessionId]);
+
+  useEffect(() => {
+    isDraggingSessionRef.current = isDraggingSession;
+  }, [isDraggingSession]);
+
+  // Persist instances to localStorage
   useEffect(() => {
     localStorage.setItem('whatsapp_instances', JSON.stringify(instances));
   }, [instances]);
 
-  // Auto‑hide notifications (except loading)
+  // Sync Tauri native sidebar bounds automatically whenever expansion or active tab changes
   useEffect(() => {
-    if (notification && notification.type !== 'loading') {
-      const timer = setTimeout(() => setNotification(null), 3000);
-      return () => clearTimeout(timer);
+    if (Bridge.isTauri() && !introVisible) {
+      Bridge.updateSidebarBounds(activeTab, isSidebarExpanded ? 280.0 : 80.0);
     }
+  }, [isSidebarExpanded, activeTab, introVisible]);
+
+  const triggerNotification = useCallback((notif) => {
+    setNotification(notif);
+    if (notif && Bridge.isTauri()) {
+      Bridge.showToast(notif.message, notif.type);
+    }
+  }, []);
+
+  // Auto-hide toast notifications
+  useEffect(() => {
+    if (!notification) return;
+    const duration = notification.type === 'loading' ? 3500 : 3000;
+    const timer = setTimeout(() => setNotification(null), duration);
+    return () => clearTimeout(timer);
   }, [notification]);
 
-  // Close editing when sidebar collapses
-  useEffect(() => {
-    if (!sidebarHovered && editingSession) {
-      setEditingSession(null);
-    }
-  }, [sidebarHovered, editingSession]);
+  const handleUpdateSession = useCallback((sessionId, updates) => {
+    setInstances((prev) =>
+      prev.map((s) => (s.id === sessionId ? { ...s, ...updates } : s))
+    );
+  }, []);
 
-  const handleAddInstance = () => {
-    const sessionNumber = instances.length + 1;
+  const handleSessionReady = useCallback((sessionId) => {
+    setInstances((prev) => {
+      const target = prev.find((s) => s.id === sessionId);
+      if (!target || (target.isReady && !target.hasError)) return prev;
+      return prev.map((s) =>
+        s.id === sessionId ? { ...s, isReady: true, hasError: false, errorMsg: null } : s
+      );
+    });
+  }, []);
+
+  const handleSessionLoadFail = useCallback(
+    (sessionId, err) => {
+      console.error(`Session ${sessionId} load fail:`, err);
+      setInstances((prev) =>
+        prev.map((s) =>
+          s.id === sessionId ? { ...s, isReady: true, hasError: true, errorMsg: err } : s
+        )
+      );
+      triggerNotification({
+        message: 'Error de conexión. Presiona Ctrl + R para recargar.',
+        type: 'error',
+      });
+    },
+    [triggerNotification]
+  );
+
+  // Close context menu on outside click, Escape, or window blur
+  useEffect(() => {
+    if (!contextMenu) return;
+
+    const handlePointerDown = (e) => {
+      if (contextMenuRef.current && contextMenuRef.current.contains(e.target)) {
+        return;
+      }
+      setContextMenu(null);
+      setPanelTemporarilyOpen(false);
+    };
+
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        setContextMenu(null);
+        setPanelTemporarilyOpen(false);
+      }
+    };
+
+    const handleBlur = () => {
+      setContextMenu(null);
+      setPanelTemporarilyOpen(false);
+      setSidebarHovered(false);
+    };
+
+    document.addEventListener('pointerdown', handlePointerDown, true);
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('blur', handleBlur);
+
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown, true);
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('blur', handleBlur);
+    };
+  }, [contextMenu]);
+
+  // Listen for clicks inside WhatsApp WebView2: close ALL sidebar overlays & collapse cleanly
+  useEffect(() => {
+    if (!Bridge.isTauri()) return;
+    let cancelled = false;
+    let unlisten = null;
+
+    Bridge.listenWebviewClick(() => {
+      setContextMenu(null);
+      setEditingSession(null);
+      setEditingName('');
+      setDeletingSessionId(null);
+      setPanelTemporarilyOpen(false);
+      setSidebarHovered(false);
+      editingSessionRef.current = null;
+      deletingSessionRef.current = null;
+      isSidebarExpandedRef.current = false;
+
+      const currentTab = activeTabRef.current;
+      if (!introVisibleRef.current && currentTab !== 'settings') {
+        Bridge.updateSidebarBounds(currentTab, 80.0);
+      }
+    }).then((fn) => {
+      if (cancelled) {
+        if (typeof fn === 'function') fn();
+        return;
+      }
+      if (typeof fn === 'function') unlisten = fn;
+    });
+
+    return () => {
+      cancelled = true;
+      if (typeof unlisten === 'function') unlisten();
+    };
+  }, []);
+
+  // Listen for WhatsApp unread count updates (registered once with proper cleanup)
+  useEffect(() => {
+    if (!Bridge.isTauri()) return;
+    let cancelled = false;
+    let unlisten = null;
+
+    Bridge.listenUnread((sessionId, unread) => {
+      handleUpdateSession(sessionId, { unread });
+    }).then((fn) => {
+      if (cancelled) {
+        if (typeof fn === 'function') fn();
+        return;
+      }
+      if (typeof fn === 'function') unlisten = fn;
+    });
+
+    return () => {
+      cancelled = true;
+      if (typeof unlisten === 'function') unlisten();
+    };
+  }, [handleUpdateSession]);
+
+  // Listen for session-ready events beyond startup (for newly added or reloaded sessions)
+  useEffect(() => {
+    if (!Bridge.isTauri()) return;
+    let cancelled = false;
+    let unlisten = null;
+
+    Bridge.listenSessionReady((sessionId) => {
+      handleSessionReady(sessionId);
+    }).then((fn) => {
+      if (cancelled) {
+        if (typeof fn === 'function') fn();
+        return;
+      }
+      if (typeof fn === 'function') unlisten = fn;
+    });
+
+    return () => {
+      cancelled = true;
+      if (typeof unlisten === 'function') unlisten();
+    };
+  }, [handleSessionReady]);
+
+  // Ensure abrupt pointer exit out of main WebView collapses the sidebar cleanly
+  useEffect(() => {
+    const handleMouseOut = (e) => {
+      if (!e.relatedTarget && !e.toElement) {
+        setSidebarHovered(false);
+        setPanelTemporarilyOpen(false);
+        const keepExpanded =
+          Boolean(contextMenu) ||
+          Boolean(editingSessionRef.current) ||
+          Boolean(deletingSessionRef.current) ||
+          isDraggingSessionRef.current;
+        isSidebarExpandedRef.current = keepExpanded;
+        if (
+          Bridge.isTauri() &&
+          !introVisibleRef.current &&
+          activeTabRef.current !== 'settings'
+        ) {
+          Bridge.updateSidebarBounds(activeTabRef.current, keepExpanded ? 280.0 : 80.0);
+        }
+      }
+    };
+    window.addEventListener('mouseout', handleMouseOut);
+    return () => window.removeEventListener('mouseout', handleMouseOut);
+  }, [contextMenu]);
+
+  // Prevent Ctrl+R / F5 from accidentally reloading the main Tauri shell UI; reload active session if supported
+  useEffect(() => {
+    if (!Bridge.isTauri()) return;
+    const handleKeyDown = (e) => {
+      const isReloadKey =
+        ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'r') || e.key === 'F5';
+      if (!isReloadKey) return;
+
+      e.preventDefault();
+      const currentTab = activeTabRef.current;
+      if (
+        currentTab !== 'settings' &&
+        !introVisibleRef.current &&
+        typeof Bridge.reloadSession === 'function'
+      ) {
+        triggerNotification({ message: 'Recargando sesión...', type: 'loading' });
+        Bridge.reloadSession(currentTab)
+          .then(() => {
+            handleUpdateSession(currentTab, { hasError: false, errorMsg: null });
+          })
+          .catch((err) => {
+            console.error('Error reloading session:', err);
+            triggerNotification({ message: 'No se pudo recargar la sesión', type: 'error' });
+          });
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [handleUpdateSession, triggerNotification]);
+
+  // Load persisted Tauri / system settings on mount
+  useEffect(() => {
+    let cancelled = false;
+    Bridge.getSettings().then((s) => {
+      if (cancelled || !s) return;
+      if (s.openAtLogin !== undefined) setStartWithWindows(s.openAtLogin);
+      if (s.startMinimized !== undefined) setStartMinimized(s.startMinimized);
+      if (s.closeToTray !== undefined) setCloseToTray(s.closeToTray);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Staggered startup (125ms per session) during IntroScreen
+  useEffect(() => {
+    let cancelled = false;
+    let unlistenReady = null;
+    let subTicker = null;
+    const readyResolvers = new Map();
+    const alreadyReported = new Set();
+    const initialInstances = instancesRef.current;
+    const initialActiveTab = activeTabRef.current;
+
+    const waitMs = (ms) => new Promise((res) => setTimeout(res, ms));
+
+    const waitForSessionDomReady = (sessionId, timeoutMs = 6500) => {
+      if (alreadyReported.has(sessionId)) {
+        return Promise.resolve();
+      }
+      return new Promise((resolve) => {
+        const timer = setTimeout(() => {
+          readyResolvers.delete(sessionId);
+          resolve();
+        }, timeoutMs);
+        readyResolvers.set(sessionId, () => {
+          clearTimeout(timer);
+          readyResolvers.delete(sessionId);
+          resolve();
+        });
+      });
+    };
+
+    const runStaggeredStartup = async () => {
+      if (Bridge.isTauri()) {
+        const fn = await Bridge.listenSessionReady((sessionId) => {
+          alreadyReported.add(sessionId);
+          const resolver = readyResolvers.get(sessionId);
+          if (resolver) resolver();
+        });
+        if (cancelled) {
+          if (typeof fn === 'function') fn();
+          return;
+        }
+        if (typeof fn === 'function') unlistenReady = fn;
+      }
+
+      if (initialInstances.length === 0) {
+        setIntroSubProgress(0.5);
+        await waitMs(320);
+        if (cancelled) return;
+        setIntroSubProgress(1);
+        setAllInitialSessionsReady(true);
+        return;
+      }
+
+      subTicker = setInterval(() => {
+        setIntroSubProgress((prev) => {
+          if (prev >= 0.86) return prev;
+          const step = (0.86 - prev) * 0.16 + 0.025;
+          return Math.min(0.86, prev + step);
+        });
+      }, 75);
+
+      let lastCompleteTime = 0;
+      const markReadyStaggered = async (sessionId) => {
+        const now = performance.now();
+        const waitNeeded = Math.max(0, lastCompleteTime + 125 - now);
+        lastCompleteTime = now + waitNeeded;
+        if (waitNeeded > 0) {
+          await waitMs(waitNeeded);
+        }
+        if (cancelled) return;
+        setReadySessionIds((prev) => {
+          const next = new Set(prev);
+          next.add(sessionId);
+          return next;
+        });
+        handleSessionReady(sessionId);
+      };
+
+      const sessionPromises = initialInstances.map(async (inst, idx) => {
+        if (idx > 0) {
+          await waitMs(idx * 125);
+        }
+        if (cancelled) return;
+
+        setStartedSessionIds((prev) => {
+          const next = new Set(prev);
+          next.add(inst.id);
+          return next;
+        });
+
+        if (Bridge.isTauri()) {
+          const readyPromise = waitForSessionDomReady(inst.id, 6500);
+          const minPace = waitMs(350 + idx * 125);
+          try {
+            await Bridge.createSessionWebview(inst.id, 80.0, inst.id === initialActiveTab);
+            await Promise.all([readyPromise, minPace]);
+          } catch (err) {
+            console.error(`Error creating startup session ${inst.id}:`, err);
+            const resolver = readyResolvers.get(inst.id);
+            if (resolver) resolver();
+            handleUpdateSession(inst.id, { hasError: true, errorMsg: String(err) });
+            await minPace;
+          }
+        } else {
+          await waitMs(350 + idx * 125);
+        }
+
+        await markReadyStaggered(inst.id);
+      });
+
+      await Promise.all(sessionPromises);
+      clearInterval(subTicker);
+
+      if (!cancelled) {
+        setIntroSubProgress(1);
+        setAllInitialSessionsReady(true);
+      }
+    };
+
+    runStaggeredStartup();
+
+    return () => {
+      cancelled = true;
+      clearInterval(subTicker);
+      for (const resolver of readyResolvers.values()) {
+        resolver();
+      }
+      readyResolvers.clear();
+      if (typeof unlistenReady === 'function') unlistenReady();
+    };
+  }, [handleSessionReady, handleUpdateSession]);
+
+  // Start IntroScreen exit fade once all initial sessions report ready
+  useEffect(() => {
+    if (!allInitialSessionsReady || introExitStartedRef.current) return;
+    introExitStartedRef.current = true;
+    let finishTimer;
+    const exitTimer = setTimeout(() => {
+      setIntroExiting(true);
+      finishTimer = setTimeout(() => {
+        introVisibleRef.current = false;
+        setIntroVisible(false);
+      }, 180);
+    }, 220);
+
+    return () => {
+      clearTimeout(exitTimer);
+      clearTimeout(finishTimer);
+    };
+  }, [allInitialSessionsReady]);
+
+  // Trigger native finishIntro AFTER introVisible flips to false (cannot be cancelled by introVisible cleanup)
+  useEffect(() => {
+    if (!introVisible && allInitialSessionsReady && !introFinishedSentRef.current) {
+      introFinishedSentRef.current = true;
+      if (Bridge.isTauri()) {
+        const liveW = isSidebarExpandedRef.current ? 280.0 : 80.0;
+        Bridge.finishIntro(
+          activeTabRef.current,
+          instancesRef.current.map((i) => i.id),
+          liveW
+        ).catch((err) => {
+          console.error('Error finishing intro:', err);
+        });
+      }
+    }
+  }, [introVisible, allInitialSessionsReady]);
+
+  const getTabIndex = useCallback((id, list = instancesRef.current) => {
+    return id === 'settings' ? list.length : list.findIndex((i) => i.id === id);
+  }, []);
+
+  const handleTabChange = useCallback(
+    (targetTabId) => {
+      if (targetTabId === activeTabRef.current) return;
+      const list = instancesRef.current;
+      const prevIdx = getTabIndex(activeTabRef.current, list);
+      const nextIdx = getTabIndex(targetTabId, list);
+      const dir = nextIdx > prevIdx ? 1 : -1;
+      const prevTab = activeTabRef.current;
+
+      setContextMenu(null);
+      setPanelTemporarilyOpen(false);
+      setSlideDirection(dir);
+      activeTabRef.current = targetTabId;
+      setActiveTab(targetTabId);
+
+      if (targetTabId === 'settings') {
+        setNotification(null);
+      }
+
+      if (Bridge.isTauri()) {
+        const liveW = isSidebarExpandedRef.current ? 280.0 : 80.0;
+        Bridge.switchSession(
+          targetTabId,
+          list.map((i) => i.id),
+          liveW,
+          dir,
+          prevTab
+        ).catch((err) => {
+          console.error('Error switching session:', err);
+        });
+      }
+    },
+    [getTabIndex]
+  );
+
+  const handleReorder = useCallback((newOrder) => {
+    instancesRef.current = newOrder;
+    setInstances(newOrder);
+    localStorage.setItem('whatsapp_instances', JSON.stringify(newOrder));
+  }, []);
+
+  const handleMouseEnter = useCallback(() => {
+    if (introVisibleRef.current) return;
+    setSidebarHovered(true);
+    if (hoverExpandEnabledRef.current || panelTemporarilyOpen) {
+      isSidebarExpandedRef.current = true;
+      if (Bridge.isTauri() && activeTabRef.current !== 'settings') {
+        Bridge.updateSidebarBounds(activeTabRef.current, 280.0);
+      }
+    }
+  }, [panelTemporarilyOpen]);
+
+  const handleMouseLeave = useCallback(() => {
+    setSidebarHovered(false);
+    setPanelTemporarilyOpen(false);
+    const keepExpanded =
+      Boolean(contextMenu) ||
+      Boolean(editingSessionRef.current) ||
+      Boolean(deletingSessionRef.current) ||
+      isDraggingSessionRef.current;
+    isSidebarExpandedRef.current = keepExpanded;
+    if (
+      Bridge.isTauri() &&
+      !introVisibleRef.current &&
+      activeTabRef.current !== 'settings'
+    ) {
+      Bridge.updateSidebarBounds(activeTabRef.current, keepExpanded ? 280.0 : 80.0);
+    }
+  }, [contextMenu]);
+
+  // Pure value update with zero side effects inside setState updater (safe in StrictMode)
+  const toggleHoverExpand = useCallback(
+    (e, forcedValue) => {
+      e?.stopPropagation();
+      const next =
+        typeof forcedValue === 'boolean' ? forcedValue : !hoverExpandEnabledRef.current;
+      hoverExpandEnabledRef.current = next;
+      setHoverExpandEnabled(next);
+      localStorage.setItem('hover_expand_enabled', String(next));
+
+      if (Bridge.isTauri() && activeTabRef.current !== 'settings') {
+        const nextExpanded =
+          (sidebarHovered && (next || panelTemporarilyOpen)) ||
+          Boolean(contextMenu) ||
+          Boolean(editingSessionRef.current) ||
+          Boolean(deletingSessionRef.current) ||
+          isDraggingSessionRef.current;
+        isSidebarExpandedRef.current = nextExpanded;
+        Bridge.updateSidebarBounds(activeTabRef.current, nextExpanded ? 280.0 : 80.0);
+      }
+
+      triggerNotification({
+        message: next
+          ? 'Despliegue al pasar el mouse: Activado'
+          : 'Despliegue al pasar el mouse: Desactivado',
+        type: 'success',
+      });
+    },
+    [sidebarHovered, panelTemporarilyOpen, contextMenu, triggerNotification]
+  );
+
+  const handleAddInstance = useCallback(async () => {
+    if (isAddingSessionRef.current) return;
+    isAddingSessionRef.current = true;
+    setIsAddingSession(true);
+
+    const currentList = instancesRef.current;
+    const sessionNumber = getNextSessionNumber(currentList);
     const newInstance = {
       id: crypto.randomUUID ? crypto.randomUUID() : `session_${Date.now()}`,
       name: `Sesión ${sessionNumber}`,
       avatar: DEFAULT_AVATAR,
       unread: 0,
-      isReady: false
+      isReady: !Bridge.isTauri(),
+      hasError: false,
+      errorMsg: null,
     };
-    setInstances([...instances, newInstance]);
+
+    const updatedInstances = [...currentList, newInstance];
+    instancesRef.current = updatedInstances;
+    setInstances(updatedInstances);
+    localStorage.setItem('whatsapp_instances', JSON.stringify(updatedInstances));
+
+    const prevTab = activeTabRef.current;
+    setContextMenu(null);
+    setSlideDirection(1);
+    activeTabRef.current = newInstance.id;
     setActiveTab(newInstance.id);
-    setNotification({ message: 'Iniciando entorno seguro...', type: 'loading' });
-  };
 
-  const handleSessionReady = (sessionId) => {
-    setInstances(prev => {
-      const session = prev.find(s => s.id === sessionId);
-      if (!session || session.isReady) return prev;
-      const updated = prev.map(s => s.id === sessionId ? { ...s, isReady: true } : s);
-      setNotification({ message: 'Instancia creada exitosamente', type: 'success' });
-      return updated;
+    triggerNotification({
+      message: 'Preparando entorno aislado para nueva sesión...',
+      type: 'loading',
     });
-  };
 
-  const handleUpdateSession = (sessionId, updates) => {
-    setInstances(prev => prev.map(s => s.id === sessionId ? { ...s, ...updates } : s));
-  };
-
-  const handleSessionLoadFail = (sessionId, err) => {
-    console.error(`Session ${sessionId} load fail:`, err);
-    setInstances(prev => prev.filter(s => s.id !== sessionId));
-    setNotification({ message: 'Error al cargar la instancia. Intenta de nuevo.', type: 'error' });
-    if (activeTab === sessionId) {
-      const remaining = instances.filter(s => s.id !== sessionId && s.isReady);
-      setActiveTab(remaining.length ? remaining[0].id : 'settings');
+    try {
+      if (Bridge.isTauri()) {
+        const liveW = isSidebarExpandedRef.current ? 280.0 : 80.0;
+        await Bridge.createSessionWebview(newInstance.id, liveW, false);
+        const latestList = instancesRef.current;
+        const finalW = isSidebarExpandedRef.current ? 280.0 : 80.0;
+        await Bridge.switchSession(
+          newInstance.id,
+          latestList.map((i) => i.id),
+          finalW,
+          1,
+          prevTab
+        );
+        // Re-sync in case pointer left sidebar while webview creation/switch was in flight
+        const postW = isSidebarExpandedRef.current ? 280.0 : 80.0;
+        if (activeTabRef.current === newInstance.id) {
+          Bridge.updateSidebarBounds(newInstance.id, postW);
+        }
+      }
+      triggerNotification({ message: 'Sesión iniciada correctamente', type: 'success' });
+    } catch (e) {
+      console.error('Error adding session:', e);
+      handleUpdateSession(newInstance.id, { hasError: true, errorMsg: String(e) });
+      triggerNotification({ message: 'Error iniciando sesión', type: 'error' });
+    } finally {
+      isAddingSessionRef.current = false;
+      setIsAddingSession(false);
     }
-  };
+  }, [handleUpdateSession, triggerNotification]);
 
-  const confirmDeleteInstance = () => {
-    const id = deleteModal;
-    const newInst = instances.filter(i => i.id !== id);
-    setInstances(newInst);
-    if (activeTab === id) {
-      const ready = newInst.filter(i => i.isReady);
-      setActiveTab(ready.length ? ready[0].id : 'settings');
-    }
-    setDeleteModal(null);
-    setNotification({ message: 'Instancia eliminada correctamente', type: 'success' });
-  };
+  const executeDeleteSession = useCallback(
+    async (id) => {
+      if (!id) return;
+      const currentList = instancesRef.current;
+      const deletedIdx = currentList.findIndex((i) => i.id === id);
+      const newInst = currentList.filter((i) => i.id !== id);
 
-  const handleToggleSetting = async (name, value) => {
-    switch (name) {
-      case 'startWithWindows':
-        setStartWithWindows(value);
-        localStorage.setItem('startWithWindows', value);
-        if (window.electron) await window.electron.toggleStartup(value);
-        break;
-      case 'startMinimized':
-        setStartMinimized(value);
-        localStorage.setItem('startMinimized', value);
-        break;
-      case 'closeToTray':
-        setCloseToTray(value);
-        localStorage.setItem('closeToTray', value);
-        if (window.electron) await window.electron.setCloseToTray(value);
-        break;
-    }
-  };
+      instancesRef.current = newInst;
+      setInstances(newInst);
+      localStorage.setItem('whatsapp_instances', JSON.stringify(newInst));
 
-  const startEditingName = (session) => {
+      if (editingSessionRef.current === id) {
+        editingSessionRef.current = null;
+        setEditingSession(null);
+        setEditingName('');
+      }
+      setContextMenu((prev) => (prev?.session?.id === id ? null : prev));
+      deletingSessionRef.current = null;
+      setDeletingSessionId(null);
+
+      if (activeTabRef.current === id) {
+        const fallbackSession =
+          newInst.length > 0
+            ? newInst[Math.min(Math.max(deletedIdx, 0), newInst.length - 1)]
+            : null;
+        const nextTab = fallbackSession ? fallbackSession.id : 'settings';
+        const nextIdx =
+          nextTab === 'settings'
+            ? newInst.length
+            : newInst.findIndex((i) => i.id === nextTab);
+        const dir = nextIdx >= deletedIdx ? 1 : -1;
+
+        setSlideDirection(dir);
+        activeTabRef.current = nextTab;
+        setActiveTab(nextTab);
+
+        if (Bridge.isTauri()) {
+          const keepExpanded =
+            Boolean(editingSessionRef.current) ||
+            (sidebarHovered && (hoverExpandEnabledRef.current || panelTemporarilyOpen));
+          const liveW = keepExpanded ? 280.0 : 80.0;
+          try {
+            await Bridge.switchSession(
+              nextTab,
+              newInst.map((i) => i.id),
+              liveW,
+              dir,
+              id
+            );
+            Bridge.updateSidebarBounds(nextTab, liveW);
+          } catch (err) {
+            console.error('Error switching after delete:', err);
+          }
+        }
+      }
+
+      if (Bridge.isTauri()) {
+        try {
+          await Bridge.destroySession(id);
+        } catch (err) {
+          console.error('Error destroying session:', err);
+          triggerNotification({
+            message: 'Sesión quitada, pero hubo un error limpiando archivos',
+            type: 'error',
+          });
+          return;
+        }
+      }
+      triggerNotification({ message: 'Sesión eliminada correctamente', type: 'success' });
+    },
+    [sidebarHovered, panelTemporarilyOpen, triggerNotification]
+  );
+
+  const handleToggleSetting = useCallback(
+    async (name, value) => {
+      try {
+        switch (name) {
+          case 'startWithWindows':
+            setStartWithWindows(value);
+            await Bridge.toggleStartup(value);
+            break;
+          case 'startMinimized':
+            setStartMinimized(value);
+            await Bridge.setStartMinimized(value);
+            break;
+          case 'closeToTray':
+            setCloseToTray(value);
+            await Bridge.setCloseToTray(value);
+            break;
+          case 'hoverExpand':
+            toggleHoverExpand(null, value);
+            break;
+          default:
+            break;
+        }
+      } catch (err) {
+        console.error(`Error updating setting ${name}:`, err);
+        if (name === 'startWithWindows') setStartWithWindows(!value);
+        if (name === 'startMinimized') setStartMinimized(!value);
+        if (name === 'closeToTray') setCloseToTray(!value);
+        triggerNotification({ message: 'No se pudo guardar la configuración', type: 'error' });
+      }
+    },
+    [toggleHoverExpand, triggerNotification]
+  );
+
+  const startEditingName = useCallback((session) => {
+    deletingSessionRef.current = null;
+    setDeletingSessionId(null);
+    editingSessionRef.current = session.id;
     setEditingSession(session.id);
     setEditingName(session.name);
-  };
+  }, []);
 
-  const saveEditingName = () => {
-    if (editingName.trim()) {
-      handleUpdateSession(editingSession, { name: editingName.trim() });
+  const saveEditingName = useCallback(() => {
+    if (editingSessionRef.current && editingName.trim()) {
+      handleUpdateSession(editingSessionRef.current, { name: editingName.trim() });
     }
+    editingSessionRef.current = null;
     setEditingSession(null);
     setEditingName('');
-  };
+  }, [editingName, handleUpdateSession]);
 
-  const cancelEditingName = () => {
+  const cancelEditingName = useCallback(() => {
+    editingSessionRef.current = null;
     setEditingSession(null);
     setEditingName('');
-  };
+  }, []);
 
-  const instanceToDelete = deleteModal ? instances.find(i => i.id === deleteModal) : null;
+  const requestDeleteSession = useCallback((id) => {
+    setContextMenu(null);
+    editingSessionRef.current = null;
+    setEditingSession(null);
+    setEditingName('');
+    deletingSessionRef.current = id;
+    setDeletingSessionId(id);
+  }, []);
 
-  const getTabIndex = (id) => (id === 'settings' ? -1 : instances.findIndex(i => i.id === id));
-  const currentIndex = getTabIndex(activeTab);
-  const previousIndex = getTabIndex(previousTabRef.current);
-  const direction = currentIndex > previousIndex ? 1 : -1;
-  useEffect(() => { previousTabRef.current = activeTab; }, [activeTab]);
+  const handleReloadSession = useCallback(
+    (sessionId) => {
+      if (Bridge.isTauri() && typeof Bridge.reloadSession === 'function') {
+        triggerNotification({ message: 'Recargando sesión...', type: 'loading' });
+        Bridge.reloadSession(sessionId)
+          .then(() => {
+            handleUpdateSession(sessionId, { hasError: false, errorMsg: null });
+          })
+          .catch((err) => {
+            console.error('Error reloading session:', err);
+            triggerNotification({ message: 'No se pudo recargar la sesión', type: 'error' });
+          });
+      }
+    },
+    [handleUpdateSession, triggerNotification]
+  );
+
+  const canReloadSession = !Bridge.isTauri()
+    ? false
+    : typeof Bridge.reloadSession === 'function';
+
+  const currentIndex = getTabIndex(activeTab, instances);
 
   const getWebviewVariants = (id) => {
-    const idx = instances.findIndex(i => i.id === id);
+    const idx = instances.findIndex((i) => i.id === id);
     const isActive = activeTab === id;
-    if (isActive) return { y: 0, opacity: 1, zIndex: 10, transition: { type: 'spring', stiffness: 300, damping: 30 } };
+    if (isActive) {
+      return { y: 0, opacity: 1, zIndex: 10, transition: { duration: 0.34, ease: EASE_EMPHASIZED } };
+    }
     return idx < currentIndex
-      ? { y: '-100%', opacity: 0, zIndex: 0, transition: { duration: 0.4, ease: 'easeInOut' } }
-      : { y: '100%', opacity: 0, zIndex: 0, transition: { duration: 0.4, ease: 'easeInOut' } };
+      ? { y: '-100%', opacity: 0, zIndex: 0, transition: { duration: 0.34, ease: EASE_EMPHASIZED } }
+      : { y: '100%', opacity: 0, zIndex: 0, transition: { duration: 0.34, ease: EASE_EMPHASIZED } };
   };
 
+  const deletingSessionObj = deletingSessionId
+    ? instances.find((i) => i.id === deletingSessionId) || null
+    : null;
+
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-[#0a0a0a] text-white font-sans">
-      {/* Sidebar */}
-      <motion.aside
-        onMouseEnter={() => setSidebarHovered(true)}
-        onMouseLeave={() => setSidebarHovered(false)}
-        className="fixed left-0 top-0 h-full w-20 hover:w-80 bg-[#0a0a0a] z-[9999] transition-all duration-300 group border-r border-white/5 overflow-hidden flex flex-col py-6"
-      >
-        {/* Branding */}
-        <div className="relative w-full h-16 flex items-center mb-8 cursor-pointer">
-          <div className="absolute left-0 w-20 h-16 flex items-center justify-center z-20">
-            <motion.div className="p-2.5 rounded-lg bg-supp-accent text-black shadow-lg shadow-supp-accent/20 cursor-pointer"
-              whileHover={{ scale: 1.1, rotate: 12 }} whileTap={{ scale: 0.95 }}>
-              <MessageSquare size={22} strokeWidth={2.5} />
-            </motion.div>
-          </div>
-          <div className="absolute left-20 top-0 h-full flex flex-col justify-center z-10 opacity-0 group-hover:opacity-100 transition-opacity duration-300 delay-75 whitespace-nowrap">
-            <h1 className="text-lg font-bold tracking-tight text-white leading-tight">Supp</h1>
-            <span className="text-xs text-gray-500 font-medium leading-tight">by Javier Medina</span>
-          </div>
-        </div>
+    <div
+      onContextMenu={(e) => {
+        const tag = e.target?.tagName;
+        if (tag !== 'INPUT' && tag !== 'TEXTAREA') {
+          e.preventDefault();
+        }
+      }}
+      className={`flex h-screen w-screen overflow-hidden ${
+        activeTab === 'settings' ? 'bg-[#12150e]' : 'bg-[#181c13]'
+      } text-[#e7ebdc] font-sans antialiased`}
+    >
+      {introVisible && (
+        <IntroScreen
+          instances={instances}
+          startedSessionIds={startedSessionIds}
+          readySessionIds={readySessionIds}
+          subProgress={introSubProgress}
+          allReady={allInitialSessionsReady}
+          exiting={introExiting}
+        />
+      )}
 
-        {/* Sessions list */}
-        <nav className="flex-1 flex flex-col gap-1 px-0 overflow-y-auto overflow-x-hidden scrollbar-thin scrollbar-thumb-gray-700 scrollbar-track-transparent max-h-[calc(100vh-300px)]">
-          <AnimatePresence mode="popLayout">
-            {instances.filter(i => i.isReady).map(instance => (
-              <motion.button key={instance.id}
-                layout
-                initial={{ opacity: 0, x: -50 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, scale: 0, transition: { duration: 0.2 } }}
-                whileHover={{ scale: 1.02, backgroundColor: "rgba(255,255,255,0.05)" }}
-                whileTap={{ scale: 0.95 }}
-                onClick={() => setActiveTab(instance.id)}
-                className={`relative w-full h-16 flex items-center cursor-pointer transition-colors outline-none ${activeTab === instance.id ? 'bg-supp-accent/10' : ''}`}
-              >
-                {/* Avatar */}
-                <div className="absolute left-0 w-20 h-16 flex items-center justify-center z-20">
-                  <motion.div className={`relative w-12 h-12 rounded-full transition-all duration-300 ${activeTab === instance.id ? 'ring-2 ring-supp-accent shadow-[0_0_15px_rgba(57,255,20,0.4)]' : 'opacity-60'} ${instance.unread > 0 && activeTab !== instance.id ? 'ring-2 ring-supp-accent/50 animate-pulse shadow-[0_0_20px_rgba(57,255,20,0.8)]' : ''}`}
-                    whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.95 }}>
-                    <img src={instance.avatar} alt={instance.name} className="w-full h-full rounded-full object-cover bg-gray-800" />
-                  </motion.div>
-                </div>
+      <SidebarRail
+        activeTab={activeTab}
+        instances={instances}
+        isSidebarExpanded={isSidebarExpanded}
+        hoverExpandEnabled={hoverExpandEnabled}
+        editingSession={editingSession}
+        deletingSessionId={deletingSessionId}
+        editingName={editingName}
+        setEditingName={setEditingName}
+        isAddingSession={isAddingSession}
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={handleMouseLeave}
+        onToggleHoverExpand={toggleHoverExpand}
+        onTabChange={handleTabChange}
+        onReorder={handleReorder}
+        onOpenContextMenu={(session, x, y) => {
+          setPanelTemporarilyOpen(true);
+          setSidebarHovered(true);
+          setContextMenu({ session, x, y });
+        }}
+        onStartEditing={startEditingName}
+        onSaveEditing={saveEditingName}
+        onCancelEditing={cancelEditingName}
+        onRequestDelete={requestDeleteSession}
+        onAddInstance={handleAddInstance}
+        onDragStateChange={(dragging) => {
+          isDraggingSessionRef.current = dragging;
+          setIsDraggingSession(dragging);
+        }}
+      />
 
-                {/* Text */}
-                <div className="absolute left-20 top-0 h-full flex flex-col justify-center z-10 opacity-0 group-hover:opacity-100 transition-opacity duration-300 delay-75 whitespace-nowrap pr-4 w-[calc(100%-80px)]">
-                  {editingSession === instance.id ? (
-                    <input type="text" value={editingName}
-                      onChange={e => setEditingName(e.target.value)}
-                      onKeyDown={e => { if (e.key === 'Enter') saveEditingName(); if (e.key === 'Escape') cancelEditingName(); }}
-                      onBlur={saveEditingName}
-                      className="h-8 bg-[#222] border border-white/20 text-white text-sm px-3 py-1 rounded-lg outline-none focus:border-supp-accent w-full shadow-lg z-50"
-                      autoFocus />
-                  ) : (
-                    <div className="flex items-center justify-between w-full">
-                      <div className="flex flex-col overflow-hidden">
-                        <span className="text-sm font-semibold text-white truncate leading-tight">{instance.name}</span>
-                        <span className="text-xs text-gray-500 truncate">WhatsApp Web</span>
-                      </div>
-
-                      <div className="flex items-center gap-2 ml-2">
-                        {instance.unread > 0 && (
-                          <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} className="min-w-[20px] h-5 px-1.5 rounded-full bg-supp-accent text-black text-xs font-bold flex items-center justify-center">
-                            {instance.unread > 99 ? '99+' : instance.unread}
-                          </motion.div>
-                        )}
-                        <div className="flex items-center opacity-0 group-hover:opacity-100 transition-opacity duration-200">
-                          <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.95 }} onClick={e => { e.stopPropagation(); startEditingName(instance); }} className="p-1.5 rounded hover:bg-white/10 text-gray-400 hover:text-white transition-colors cursor-pointer">
-                            <Pencil size={14} />
-                          </motion.button>
-                          <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.95 }} onClick={e => { e.stopPropagation(); setDeleteModal(instance.id); }} className="p-1.5 rounded hover:bg-red-500/20 text-gray-500 hover:text-red-400 transition-colors cursor-pointer">
-                            <Trash2 size={16} />
-                          </motion.button>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </motion.button>
-            ))}
-          </AnimatePresence>
-
-          {/* Add new session */}
-          <motion.button
-            layout
-            onClick={handleAddInstance}
-            whileHover={{ scale: 1.02, backgroundColor: "rgba(255,255,255,0.05)" }}
-            whileTap={{ scale: 0.95 }}
-            className="relative w-full h-16 flex items-center cursor-pointer group transition-colors outline-none mt-2"
+      {/* Main Content Area (Settings & Empty-State Dashboard) */}
+      <AnimatePresence mode="wait">
+        {activeTab === 'settings' && (
+          <Motion.main
+            key="settings-main"
+            initial={{ opacity: 0, y: slideDirection > 0 ? 28 : -28, scale: 0.985 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: slideDirection > 0 ? -20 : 20, scale: 0.985 }}
+            transition={{ duration: 0.24, ease: EASE_EMPHASIZED }}
+            style={{ willChange: 'transform, opacity' }}
+            className="flex-1 h-full relative overflow-hidden bg-[#12150e]"
           >
-            <div className="absolute left-0 w-20 h-16 flex items-center justify-center z-20">
-              <motion.div
-                whileHover={{ scale: 1.1 }}
-                whileTap={{ scale: 0.95 }}
-                className="w-12 h-12 rounded-full border-2 border-dashed border-gray-600 flex items-center justify-center text-gray-500 group-hover:text-gray-300 group-hover:border-gray-400 transition-colors"
-              >
-                <Plus size={24} />
-              </motion.div>
-            </div>
-            <div className="absolute left-20 top-0 h-full flex items-center z-10 opacity-0 group-hover:opacity-100 transition-opacity duration-300 delay-100 whitespace-nowrap">
-              <span className="text-sm font-semibold text-gray-400 group-hover:text-white transition-colors duration-200">Nueva Sesión</span>
-            </div>
-          </motion.button>
-        </nav>
-
-        {/* Settings button */}
-        <div className="mt-auto pt-4 pb-2">
-          <motion.button
-            onClick={() => setActiveTab('settings')}
-            whileHover={{ scale: 1.02 }}
-            whileTap={{ scale: 0.95 }}
-            className={`relative w-full h-16 flex items-center cursor-pointer transition-colors outline-none ${activeTab === 'settings' ? 'bg-supp-accent/10' : 'hover:bg-white/5'}`}
-          >
-            <div className="absolute left-0 w-20 h-16 flex items-center justify-center z-20">
-              <div className={`w-12 h-12 flex items-center justify-center rounded-xl transition-colors ${activeTab === 'settings' ? 'text-supp-accent' : 'text-gray-500 group-hover:text-white'}`}>
-                <Settings size={24} />
-              </div>
-            </div>
-            <div className="absolute left-20 top-0 h-full flex flex-col justify-center z-10 opacity-0 group-hover:opacity-100 transition-opacity duration-300 delay-75 whitespace-nowrap">
-              <span className={`text-sm font-medium ${activeTab === 'settings' ? 'text-supp-accent' : 'text-gray-400 group-hover:text-white'}`}>Preferencias</span>
-            </div>
-          </motion.button>
-        </div>
-      </motion.aside>
-
-      {/* Main content */}
-      <main className="ml-20 flex-1 h-full relative overflow-hidden">
-        {/* Settings view */}
-        <AnimatePresence mode="wait">
-          {activeTab === 'settings' && (
             <PreferencesPanel
               settings={{
                 openAtLogin: startWithWindows,
                 startMinimized: startMinimized,
-                closeToTray: closeToTray
+                closeToTray: closeToTray,
+                hoverExpandEnabled: hoverExpandEnabled,
               }}
+              instances={instances}
+              isAddingSession={isAddingSession}
+              canReloadSession={canReloadSession}
               toggleSetting={handleToggleSetting}
+              onAddInstance={handleAddInstance}
+              onSelectSession={handleTabChange}
+              onRenameSession={(id, newName) => handleUpdateSession(id, { name: newName })}
+              onReloadSession={handleReloadSession}
+              onDeleteSession={requestDeleteSession}
             />
-          )}
-        </AnimatePresence>
+          </Motion.main>
+        )}
+      </AnimatePresence>
 
-        {/* Webviews */}
-        {instances.map(instance => (
-          <SessionWebview key={instance.id} session={instance} isActive={activeTab === instance.id} onReady={handleSessionReady} onUpdateSession={handleUpdateSession} onLoadFail={handleSessionLoadFail} animationVariants={getWebviewVariants(instance.id)} />
+      {/* Non-Tauri fallback webviews (Electron or Browser dev preview) */}
+      {!Bridge.isTauri() &&
+        instances.map((instance) => (
+          <SessionWebview
+            key={instance.id}
+            session={instance}
+            isActive={activeTab === instance.id}
+            onReady={handleSessionReady}
+            onUpdateSession={handleUpdateSession}
+            onLoadFail={handleSessionLoadFail}
+            animationVariants={getWebviewVariants(instance.id)}
+          />
         ))}
-      </main>
 
-      {/* Delete Modal */}
-      <AnimatePresence>
-        {deleteModal && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.2 }} className="fixed inset-0 z-[200] flex items-center justify-center bg-black/80 backdrop-blur-sm">
-            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} transition={{ type: 'spring', stiffness: 300, damping: 25 }} className="bg-[#1a1a1a] border border-white/10 rounded-2xl p-8 max-w-md w-full mx-4 shadow-2xl">
-              <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ delay: 0.1, type: 'spring', stiffness: 500, damping: 15 }} className="flex justify-center mb-6"><div className="p-4 rounded-full bg-red-500/10"><AlertTriangle size={48} className="text-red-400" /></div></motion.div>
-              <motion.h2 initial={{ y: 10, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ delay: 0.15 }} className="text-2xl font-bold text-white text-center mb-3">¿Eliminar instancia?</motion.h2>
-              <motion.div initial={{ y: 10, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ delay: 0.2 }}><p className="text-gray-400 text-center mb-2">Se eliminará la sesión <span className="text-white font-semibold">"{instanceToDelete?.name}"</span></p><p className="text-gray-500 text-sm text-center mb-8">Se perderán los datos locales de esta sesión de WhatsApp Web.</p></motion.div>
-              <motion.div initial={{ y: 10, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ delay: 0.25 }} className="flex gap-3"><motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} onClick={() => setDeleteModal(null)} className="flex-1 px-6 py-3 rounded-xl bg-white/5 hover:bg-white/10 text-white font-medium transition-all duration-200 border border-white/10 cursor-pointer">Cancelar</motion.button><motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} onClick={confirmDeleteInstance} className="flex-1 px-6 py-3 rounded-xl bg-red-500 hover:bg-red-600 text-white font-semibold transition-all duration-200 shadow-lg shadow-red-500/20 cursor-pointer">Eliminar</motion.button></motion.div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {/* Toast Pill (shown inside Settings view; in Tauri sessions, Rust shows native floating toast inside WebView2) */}
+      <ToastPill notification={activeTab === 'settings' ? notification : null} />
 
-      {/* Toast */}
-      <AnimatePresence>
-        {notification && (
-          <motion.div initial={{ y: 50, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 50, opacity: 0 }} transition={{ type: 'spring', stiffness: 500, damping: 30 }} className="fixed bottom-8 left-1/2 -translate-x-1/2 z-[300]">
-            <div className={`bg-[#1a1a1a] border-2 rounded-xl px-6 py-4 shadow-2xl flex items-center gap-3 ${notification.type === 'loading' ? 'border-yellow-500/50 shadow-yellow-500/10' : ''} ${notification.type === 'success' ? 'border-supp-accent shadow-supp-accent/20' : ''} ${notification.type === 'error' ? 'border-red-500 shadow-red-500/20' : ''}`}>
-              {notification.type === 'loading' && (
-                <motion.div animate={{ rotate: 360 }} transition={{ duration: 1, repeat: Infinity, ease: 'linear' }} className="p-1 rounded-full bg-yellow-500/20"><svg className="w-5 h-5 text-yellow-500" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg></motion.div>
-              )}
-              {notification.type === 'success' && (
-                <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ delay: 0.1, type: 'spring', stiffness: 500, damping: 15 }} className="p-1 rounded-full bg-supp-accent/20"><CheckCircle size={20} className="text-supp-accent" /></motion.div>
-              )}
-              {notification.type === 'error' && (
-                <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ delay: 0.1, type: 'spring', stiffness: 500, damping: 15 }} className="p-1 rounded-full bg-red-500/20"><AlertTriangle size={20} className="text-red-500" /></motion.div>
-              )}
-              <p className="text-white font-medium">{notification.message}</p>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {/* Session Context Menu */}
+      <SessionContextMenu
+        contextMenu={contextMenu}
+        menuRef={contextMenuRef}
+        activeTab={activeTab}
+        isCompactViewport={activeTab !== 'settings'}
+        canReloadSession={canReloadSession}
+        onOpenSession={(sess) => {
+          setContextMenu(null);
+          setPanelTemporarilyOpen(false);
+          handleTabChange(sess.id);
+        }}
+        onRenameSession={(sess) => {
+          setContextMenu(null);
+          startEditingName(sess);
+        }}
+        onReloadSession={(sess) => {
+          setContextMenu(null);
+          setPanelTemporarilyOpen(false);
+          handleReloadSession(sess.id);
+        }}
+        onDeleteSession={(sess) => {
+          requestDeleteSession(sess.id);
+        }}
+      />
+
+      {/* Delete Confirmation Modal (adapts cleanly to 280px rail over active session OR 100vw in Settings) */}
+      <DeleteSessionModal
+        session={deletingSessionObj}
+        isCompactViewport={activeTab !== 'settings'}
+        onConfirm={executeDeleteSession}
+        onCancel={() => {
+          deletingSessionRef.current = null;
+          setDeletingSessionId(null);
+          setPanelTemporarilyOpen(false);
+        }}
+      />
     </div>
   );
 }

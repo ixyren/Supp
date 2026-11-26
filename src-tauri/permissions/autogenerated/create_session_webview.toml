@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-create-session-webview"
+description = "Enables the create_session_webview command without any pre-configured scope."
+commands.allow = ["create_session_webview"]
+
+[[permission]]
+identifier = "deny-create-session-webview"
+description = "Denies the create_session_webview command without any pre-configured scope."
+commands.deny = ["create_session_webview"]

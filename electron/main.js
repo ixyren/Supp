@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, Tray, Menu, MenuItem, session, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, Tray, Menu, MenuItem, session, nativeImage, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -121,9 +121,36 @@ function createWindow() {
         }
     });
 
-    // WhatsApp Popups
+    // Handle external links opening in system default browser
+    mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+        if (url.startsWith('http:') || url.startsWith('https:')) {
+            shell.openExternal(url);
+        }
+        return { action: 'deny' };
+    });
+
+    // WhatsApp Popups & external link handling in webviews
     mainWindow.webContents.on('did-attach-webview', (event, webviewWebContents) => {
-        webviewWebContents.setWindowOpenHandler(() => ({ action: 'allow' }));
+        webviewWebContents.setWindowOpenHandler(({ url }) => {
+            if (url.startsWith('http:') || url.startsWith('https:')) {
+                shell.openExternal(url);
+            }
+            return { action: 'deny' };
+        });
+
+        webviewWebContents.on('will-navigate', (event, url) => {
+            if (url.startsWith('http:') || url.startsWith('https:')) {
+                try {
+                    const parsedUrl = new URL(url);
+                    if (!parsedUrl.hostname.endsWith('whatsapp.com') && !parsedUrl.hostname.endsWith('whatsapp.net')) {
+                        event.preventDefault();
+                        shell.openExternal(url);
+                    }
+                } catch (e) {
+                    console.error('Error parsing navigation URL:', e);
+                }
+            }
+        });
     });
 }
 

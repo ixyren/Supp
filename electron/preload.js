@@ -4,9 +4,9 @@ const { contextBridge, ipcRenderer } = require('electron');
 // the ipcRenderer without exposing the entire object
 contextBridge.exposeInMainWorld('electron', {
     // Toggle startup with Windows
-    toggleStartup: async (enable) => {
+    toggleStartup: async (enable, startMinimized) => {
         try {
-            return await ipcRenderer.invoke('toggle-startup', enable);
+            return await ipcRenderer.invoke('toggle-startup', enable, startMinimized);
         } catch (error) {
             console.error('Error toggling startup:', error);
             return { success: false, error: error.message };

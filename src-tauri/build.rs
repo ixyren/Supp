@@ -1,0 +1,27 @@
+fn main() {
+  tauri_build::try_build(
+    tauri_build::Attributes::new().app_manifest(
+      tauri_build::AppManifest::new().commands(&[
+        "get_settings",
+        "set_close_to_tray",
+        "set_start_minimized",
+        "minimize_to_tray",
+        "quit_app",
+        "create_session_webview",
+        "switch_session",
+        "update_sidebar_bounds",
+        "finish_intro",
+        "destroy_session",
+        "reload_session",
+        "open_external_url",
+        "copy_image_to_clipboard",
+        "copy_video_to_clipboard",
+        "report_unread",
+        "report_session_ready",
+        "report_webview_click",
+        "show_toast",
+      ]),
+    ),
+  )
+  .expect("failed to run tauri-build");
+}
