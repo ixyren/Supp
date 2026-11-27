@@ -313,6 +313,8 @@ impl Notifications {
 /// Pidgin's message and alert sounds (GPL-2.0, see `assets/sounds/README.md`).
 const RECEIVE: &[u8] = include_bytes!("../assets/sounds/receive.wav");
 const ALERT: &[u8] = include_bytes!("../assets/sounds/alert.wav");
+const SHUTTER: &[u8] = include_bytes!("../assets/sounds/shutter.wav");
+const SHUTTER_MENTION: &[u8] = include_bytes!("../assets/sounds/shutter-mention.wav");
 
 /// Whether the notification itself plays the sound, instead of ZapFast. On
 /// macOS a sound the notification plays is silenced along with the banner by
@@ -322,6 +324,8 @@ fn sound_file(sound: &NotificationSound) -> Option<&'static str> {
     match sound {
         NotificationSound::Receive => Some("supp-receive.wav"),
         NotificationSound::Alert => Some("supp-alert.wav"),
+        NotificationSound::Shutter => Some("supp-shutter.wav"),
+        NotificationSound::ShutterMention => Some("supp-shutter-mention.wav"),
         _ => None,
     }
 }
@@ -349,6 +353,10 @@ pub fn play_sound(sound: NotificationSound) {
     let source: Box<dyn Fn() -> std::io::Result<Box<dyn ReadSeek>> + Send> = match sound {
         NotificationSound::Receive => Box::new(|| Ok(Box::new(std::io::Cursor::new(RECEIVE)))),
         NotificationSound::Alert => Box::new(|| Ok(Box::new(std::io::Cursor::new(ALERT)))),
+        NotificationSound::Shutter => Box::new(|| Ok(Box::new(std::io::Cursor::new(SHUTTER)))),
+        NotificationSound::ShutterMention => {
+            Box::new(|| Ok(Box::new(std::io::Cursor::new(SHUTTER_MENTION))))
+        }
         NotificationSound::Custom(path) => Box::new(move || {
             Ok(Box::new(std::io::BufReader::new(std::fs::File::open(
                 &path,
@@ -581,7 +589,12 @@ mod tests {
     #[test]
     fn the_bundle_script_ships_every_built_in_sound() {
         let script = include_str!("../packaging/macos/bundle.sh");
-        for sound in [NotificationSound::Receive, NotificationSound::Alert] {
+        for sound in [
+            NotificationSound::Receive,
+            NotificationSound::Alert,
+            NotificationSound::Shutter,
+            NotificationSound::ShutterMention,
+        ] {
             assert!(script.contains(sound_file(&sound).expect("bundled sound")));
         }
         assert_eq!(

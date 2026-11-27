@@ -44,6 +44,8 @@ iconutil -c icns "$iconset" -o "$app/Contents/Resources/zapfast.icns"
 sounds="$here/../../assets/sounds"
 cp "$sounds/receive.wav" "$app/Contents/Resources/supp-receive.wav"
 cp "$sounds/alert.wav" "$app/Contents/Resources/supp-alert.wav"
+cp "$sounds/shutter.wav" "$app/Contents/Resources/supp-shutter.wav"
+cp "$sounds/shutter-mention.wav" "$app/Contents/Resources/supp-shutter-mention.wav"
 
 # Attach the microphone entitlement before native-packages preserves it when
 # replacing the ad-hoc signature with a hardened Developer ID signature.

@@ -4559,6 +4559,40 @@ impl App {
                     }
                 }
             }
+            Event::StickerAudioDownloaded {
+                chat,
+                message,
+                result,
+            } => {
+                let want_voice = !self.events_hidden
+                    && self
+                        .voice_wanted
+                        .as_ref()
+                        .is_some_and(|(wanted_chat, wanted, _)| {
+                            wanted_chat == &chat && wanted == &message
+                        });
+                let open = self.open_chat.as_deref() == Some(chat.as_str());
+                if let Some(audio) = self.sticker_audio_mut(&chat, &message) {
+                    match result {
+                        Ok(path) => {
+                            audio.path = Some(path.clone());
+                            audio.state = MediaState::Idle;
+                            if want_voice {
+                                self.voice_wanted = None;
+                                if open {
+                                    self.actions.push(Action::PlayVoice { message, path });
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            audio.state = MediaState::Failed(error);
+                            if want_voice {
+                                self.voice_wanted = None;
+                            }
+                        }
+                    }
+                }
+            }
             Event::Syncing(syncing) => {
                 if self.syncing && !syncing {
                     self.toast("History loaded");
@@ -5905,6 +5939,13 @@ impl App {
     fn motion_mut(&mut self, chat: &str, id: &str) -> Option<&mut crate::model::Motion> {
         match &mut self.conversations.get_mut(chat)?.message_mut(id)?.content {
             Content::Image { motion, .. } => motion.as_mut(),
+            _ => None,
+        }
+    }
+
+    fn sticker_audio_mut(&mut self, chat: &str, id: &str) -> Option<&mut crate::model::Media> {
+        match &mut self.conversations.get_mut(chat)?.message_mut(id)?.content {
+            Content::Sticker { audio, .. } => audio.as_mut(),
             _ => None,
         }
     }
@@ -7826,6 +7867,29 @@ impl App {
                 }
                 motion.state = MediaState::Downloading;
                 self.backend.send(Command::DownloadMotion { chat, message });
+            }
+            Action::ToggleStickerAudio { chat, message } => {
+                let state = self.sticker_audio_mut(&chat, &message).map(|audio| {
+                    (
+                        audio.path.clone(),
+                        matches!(audio.state, MediaState::Downloading),
+                    )
+                });
+                match state {
+                    Some((Some(path), _)) => self.play_voice(message, path),
+                    Some((None, true)) => {
+                        self.voice_wanted = Some((chat, message, Instant::now()));
+                    }
+                    Some((None, false)) => {
+                        if let Some(audio) = self.sticker_audio_mut(&chat, &message) {
+                            audio.state = MediaState::Downloading;
+                        }
+                        self.voice_wanted = Some((chat.clone(), message.clone(), Instant::now()));
+                        self.backend
+                            .send(Command::DownloadStickerAudio { chat, message });
+                    }
+                    None => {}
+                }
             }
             Action::Download {
                 manual,
@@ -17683,6 +17747,7 @@ mod tests {
         sticker.content = Content::Sticker {
             media: media(Some(paths[3].clone())),
             animated: false,
+            audio: None,
         };
         rows.push(sticker);
         let mut pending = message("chat", "pending", 7);

@@ -34,7 +34,16 @@ pub(super) fn card(
             let rect = ui.max_rect();
             let top = theme::blend(palette.window, palette.accent, 0.10);
             super::widgets::paint_vertical_gradient(ui, rect, top, palette.window);
-            let card_width = (460.0_f32.min(rect.width() - 24.0)).max(0.0);
+            super::caption_drag(
+                ui,
+                egui::Rect::from_min_size(rect.min, Vec2::new(rect.width(), theme::TOP_BAR_HEIGHT)),
+            );
+            let title_inset = theme::caption_footprint(ui.ctx()).height;
+            let body_area = egui::Rect::from_min_max(
+                rect.min + Vec2::new(0.0, title_inset),
+                rect.max,
+            );
+            let card_width = (460.0_f32.min(body_area.width() - 24.0)).max(0.0);
             // Center the card using its previous height. Its content determines
             // the next frame's height.
             let height_id = ui.id().with(format!("{salt}-card-height"));
@@ -42,9 +51,11 @@ pub(super) fn card(
                 .ctx()
                 .data(|data| data.get_temp::<f32>(height_id))
                 .unwrap_or(560.0);
-            let card_height = (known_height.min(rect.height() - 24.0)).max(0.0);
-            let card =
-                egui::Rect::from_center_size(rect.center(), Vec2::new(card_width, card_height));
+            let card_height = (known_height.min((body_area.height() - 24.0).max(0.0))).max(0.0);
+            let card = egui::Rect::from_center_size(
+                body_area.center(),
+                Vec2::new(card_width, card_height),
+            );
             let mut card_ui = ui.new_child(
                 egui::UiBuilder::new()
                     .max_rect(card)

@@ -1196,6 +1196,26 @@ impl Archive {
         Ok(false)
     }
 
+    /// Saves the downloaded audio file path onto a cached audio sticker message.
+    pub fn put_sticker_audio_path(
+        &self,
+        chat: &str,
+        id: &str,
+        path: Option<&Path>,
+    ) -> Result<bool> {
+        let Some(mut message) = self.message(chat, id)? else {
+            return Ok(false);
+        };
+        if let Content::Sticker {
+            audio: Some(audio), ..
+        } = &mut message.content
+        {
+            audio.path = path.map(Path::to_path_buf);
+            return self.set_content(chat, id, &message.content, message.edited);
+        }
+        Ok(false)
+    }
+
     /// Returns all recorded motion clip paths.
     pub fn motion_paths(&self) -> Result<Vec<(String, String, PathBuf)>> {
         let mut statement = self.connection.prepare(
@@ -6236,6 +6256,7 @@ mod sticker_tests {
                     state: MediaState::Idle,
                 },
                 animated: false,
+                audio: None,
             },
             status: Delivery::None,
             delivered_at: None,
@@ -6690,6 +6711,7 @@ mod media_path_tests {
                 Content::Sticker {
                     media: media(),
                     animated: false,
+                    audio: None,
                 },
             ),
             (

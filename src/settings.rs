@@ -396,11 +396,17 @@ pub enum NotificationSound {
     /// Pidgin's alert sound, the default for mentions and replies to us.
     #[serde(alias = "ripple")]
     Alert,
+    /// Subtle screenshot-shutter click for new messages.
+    #[serde(rename = "shutter")]
+    Shutter,
+    /// Subtle screenshot-shutter click with chime for mentions and replies.
+    #[serde(rename = "shutter_mention")]
+    ShutterMention,
     /// Whatever the operating system plays for notifications.
     System,
     /// No sound.
     None,
-    /// An audio file ZapFast plays itself.
+    /// An audio file Supp plays itself.
     Custom(std::path::PathBuf),
 }
 
@@ -557,7 +563,7 @@ impl Default for Settings {
             theme: ThemeChoice::Dark,
             messages_theme: false,
             font: FontChoice::Inter,
-            custom_titlebar: false,
+            custom_titlebar: cfg!(all(target_os = "windows", not(test))),
             interface_language: None,
             custom_theme: None,
             custom_theme_cache: None,

@@ -23,14 +23,14 @@ const IDLE: Duration = Duration::from_secs(20);
 /// A playing animation not drawn within this window has left the viewport.
 const VISIBLE: Duration = Duration::from_millis(500);
 /// Maximum concurrent decoders.
-const MAX_DECODERS: usize = 2;
+const MAX_DECODERS: usize = 4;
 /// Bound source pixels before either poster decoder allocates its full canvas.
 const MAX_IMAGE_SIDE: u32 = 4096;
 /// Encoded sources and each image decoder use at most this allocation allowance.
 const MAX_IMAGE_BYTES: u64 = 64 * 1024 * 1024;
 
 /// Global texture-frame budget. Least-recently-used animations are removed first.
-const MAX_RESIDENT_FRAMES: usize = 450;
+const MAX_RESIDENT_FRAMES: usize = 900;
 
 static DECODING: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 

@@ -825,6 +825,8 @@ pub enum Content {
     Sticker {
         media: Media,
         animated: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        audio: Option<Media>,
     },
     /// A WhatsApp sticker pack shared in a chat. Its stickers download when
     /// someone opens it.
@@ -2877,6 +2879,11 @@ pub enum Action {
         chat: ChatId,
         message: String,
     },
+    /// Plays, pauses, or downloads the embedded audio clip of an audio sticker.
+    ToggleStickerAudio {
+        chat: ChatId,
+        message: String,
+    },
     /// Plays or pauses a downloaded voice or audio message.
     PlayVoice {
         message: String,
@@ -4382,6 +4389,7 @@ mod tests {
                 Content::Sticker {
                     media: media(),
                     animated: false,
+                    audio: None,
                 },
             ),
             row(

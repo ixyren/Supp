@@ -170,13 +170,14 @@ fn header(app: &mut App, ui: &mut egui::Ui) {
                     if app.page == Page::Calls && app.new_call {
                         new_call_header(app, ui, 20.0, buttons_width);
                     } else if app.page != Page::Calls && app.show_starred {
+                        let back_label = crate::i18n::gettext(app.locale, "Back to chats");
                         if theme::icon_button(
                             ui,
                             Icon::ArrowLeft,
                             18.0,
                             palette.secondary,
                             palette.text,
-                            "Back to chats",
+                            &back_label,
                         )
                         .tab_stop(Stop::Back)
                         .clicked()
@@ -191,13 +192,14 @@ fn header(app: &mut App, ui: &mut egui::Ui) {
                             buttons_width,
                         );
                     } else if app.page != Page::Calls && (app.show_archived || app.locked_folder) {
+                        let back_label = crate::i18n::gettext(app.locale, "Back to chats");
                         if theme::icon_button(
                             ui,
                             Icon::ArrowLeft,
                             18.0,
                             palette.secondary,
                             palette.text,
-                            "Back to chats",
+                            &back_label,
                         )
                         .tab_stop(Stop::Back)
                         .clicked()
@@ -505,13 +507,14 @@ fn macos_header(app: &mut App, ui: &mut egui::Ui) {
                 if app.page == Page::Calls && app.new_call {
                     new_call_header(app, ui, 16.0, header_buttons_width(ui, &buttons));
                 } else if app.page != Page::Calls && app.show_starred {
+                    let back_label = crate::i18n::gettext(app.locale, "Back to chats");
                     if theme::icon_button(
                         ui,
                         Icon::ArrowLeft,
                         18.0,
                         palette.secondary,
                         palette.text,
-                        "Back to chats",
+                        &back_label,
                     )
                     .tab_stop(Stop::Back)
                     .clicked()
@@ -526,13 +529,14 @@ fn macos_header(app: &mut App, ui: &mut egui::Ui) {
                         header_buttons_width(ui, &buttons),
                     );
                 } else if app.page != Page::Calls && (app.show_archived || app.locked_folder) {
+                    let back_label = crate::i18n::gettext(app.locale, "Back to chats");
                     if theme::icon_button(
                         ui,
                         Icon::ArrowLeft,
                         18.0,
                         palette.secondary,
                         palette.text,
-                        "Back to chats",
+                        &back_label,
                     )
                     .tab_stop(Stop::Back)
                     .clicked()
@@ -931,32 +935,38 @@ fn list(app: &mut App, ui: &mut egui::Ui) {
     }
     let chats: Vec<Chat> = app.visible_chats().into_iter().cloned().collect();
     if chats.is_empty() {
-        // The favorites title is translated, so it is bound here: the tuple
-        // below borrows it for this frame, and every other arm stays a literal.
-        let favorites_title;
         let (title, body) = if app.show_archived {
-            ("Nothing archived", "Archived chats appear here.")
+            (
+                crate::i18n::gettext(app.locale, "Nothing archived"),
+                crate::i18n::gettext(app.locale, "Archived chats appear here."),
+            )
         } else if app.chat_filter != ChatFilter::All {
             let title = match app.chat_filter {
-                ChatFilter::Unread => "No unread chats",
-                ChatFilter::Private => "No private chats",
-                ChatFilter::Channels => "No channels",
-                ChatFilter::Favorites => {
-                    favorites_title = crate::i18n::gettext(app.locale, "No favorites yet");
-                    favorites_title.as_ref()
-                }
-                _ => "No groups",
+                ChatFilter::Unread => crate::i18n::gettext(app.locale, "No unread chats"),
+                ChatFilter::Private => crate::i18n::gettext(app.locale, "No private chats"),
+                ChatFilter::Channels => crate::i18n::gettext(app.locale, "No channels"),
+                ChatFilter::Favorites => crate::i18n::gettext(app.locale, "No favorites yet"),
+                _ => crate::i18n::gettext(app.locale, "No groups"),
             };
-            (title, "Choose All to see every chat.")
+            (
+                title,
+                crate::i18n::gettext(app.locale, "Choose All to see every chat."),
+            )
         } else if app.syncing {
-            ("Loading your chats", "Receiving history from your phone.")
+            (
+                crate::i18n::gettext(app.locale, "Loading your chats"),
+                crate::i18n::gettext(app.locale, "Receiving history from your phone."),
+            )
         } else {
             (
-                "No chats yet",
-                "Use New chat to message a contact or yourself.",
+                crate::i18n::gettext(app.locale, "No chats yet"),
+                crate::i18n::gettext(
+                    app.locale,
+                    "Use New chat to message a contact or yourself.",
+                ),
             )
         };
-        widgets::empty_state(ui, &palette, Icon::MessageCircle, title, body);
+        widgets::empty_state(ui, &palette, Icon::MessageCircle, &title, &body);
         return;
     }
     // Rows touch: one clickable surface from top to bottom, no gaps or rules.
@@ -2295,10 +2305,21 @@ fn sound_menu(app: &mut App, ui: &mut egui::Ui, palette: &Palette, chat: &Chat) 
     let default_label = crate::i18n::gettext(locale, "Default");
     let system_label = crate::i18n::gettext(locale, "System sound");
     let none_label = crate::i18n::gettext(locale, "No sound");
-    let sounds: [(Option<NotificationSound>, std::borrow::Cow<'static, str>); 5] = [
+    let sounds: [(Option<NotificationSound>, std::borrow::Cow<'static, str>); 7] = [
         (None, default_label),
         (Some(NotificationSound::Receive), "Pidgin".into()),
-        (Some(NotificationSound::Alert), "Pidgin alert".into()),
+        (
+            Some(NotificationSound::Alert),
+            crate::i18n::gettext(locale, "Pidgin alert"),
+        ),
+        (
+            Some(NotificationSound::Shutter),
+            crate::i18n::gettext(locale, "Shutter"),
+        ),
+        (
+            Some(NotificationSound::ShutterMention),
+            crate::i18n::gettext(locale, "Shutter mention"),
+        ),
         (Some(NotificationSound::System), system_label),
         (Some(NotificationSound::None), none_label),
     ];

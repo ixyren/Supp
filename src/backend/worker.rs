@@ -9081,12 +9081,26 @@ impl Worker {
                 result,
             } => self.downloaded(chat, id, card, result),
             Command::DownloadMotion { chat, message } => self.download_motion(chat, message),
+            Command::DownloadStickerAudio { chat, message } => {
+                self.download_sticker_audio(chat, message)
+            }
             Command::MotionDownloaded { chat, id, result } => {
                 let result = result.and_then(|path| {
                     let saved = self.archive.put_motion_path(&chat, &id, Some(&path));
                     confirmed_download(path, saved)
                 });
                 self.emit(Event::Motion {
+                    chat,
+                    message: id,
+                    result,
+                });
+            }
+            Command::StickerAudioDownloaded { chat, id, result } => {
+                let result = result.and_then(|path| {
+                    let saved = self.archive.put_sticker_audio_path(&chat, &id, Some(&path));
+                    confirmed_download(path, saved)
+                });
+                self.emit(Event::StickerAudioDownloaded {
                     chat,
                     message: id,
                     result,
@@ -10469,6 +10483,16 @@ impl Worker {
                 media.url = None;
                 return Some(Box::new(media.clone()));
             }
+            if let Some(media) = fresh_base
+                .audio_sticker_message
+                .as_option_mut()
+                .and_then(|wrapper| wrapper.message.as_option_mut())
+                .and_then(|inner| inner.sticker_message.as_option_mut())
+            {
+                media.direct_path = Some(direct);
+                media.url = None;
+                return Some(Box::new(media.clone()));
+            }
             None
         };
         let dir = self.download_dir(&chat);
@@ -10621,6 +10645,48 @@ impl Worker {
             )
             .await;
             let _ = commands.send(Command::MotionDownloaded { chat, id, result });
+        });
+    }
+
+    /// Downloads the embedded audio clip of an audio sticker into the media cache.
+    fn download_sticker_audio(&mut self, chat: ChatId, id: String) {
+        let raw = self.archive.raw(&chat, &id).ok().flatten();
+        let message = raw.and_then(|bytes| wa::Message::decode_from_slice(&bytes).ok());
+        let audio = message
+            .as_ref()
+            .and_then(|msg| sticker_audio_of(msg.get_base_message()).cloned());
+        let (client, audio) = match (self.client.clone(), audio) {
+            (Some(client), Some(audio)) if !attachment_is_too_large(audio.file_length) => {
+                (client, audio)
+            }
+            (client, audio) => {
+                let error = match (client, audio) {
+                    (None, _) => "Not connected to WhatsApp",
+                    (_, None) => "Attachment download keys are missing",
+                    _ => ATTACHMENT_LIMIT_ERROR,
+                };
+                self.emit(Event::StickerAudioDownloaded {
+                    chat,
+                    message: id,
+                    result: Err(error.to_owned()),
+                });
+                return;
+            }
+        };
+        let mime = audio
+            .mimetype
+            .clone()
+            .unwrap_or_else(|| "audio/ogg".to_owned());
+        let dir = self.dirs.media_cache_dir();
+        let commands = self.commands.clone();
+        tokio::spawn(async move {
+            let path = media_path(&dir, &chat, &format!("{id}-sticker-audio"), &mime, None);
+            let result = with_attachment_deadline(
+                attachment_deadline(audio.file_length),
+                download_attachment(&client, &audio, &dir, &path, ATTACHMENT_DOWNLOAD_LIMIT),
+            )
+            .await;
+            let _ = commands.send(Command::StickerAudioDownloaded { chat, id, result });
         });
     }
 
@@ -12947,17 +13013,44 @@ fn live_location_newer(share: &Message, incoming: &Content) -> bool {
     }
 }
 
-/// A Lottie sticker's media lives in FutureProofMessage -> Message -> StickerMessage.
-/// Use the same extraction for both classification and downloads.
+/// A Lottie or audio sticker's media may live directly on `sticker_message` or
+/// nested inside a `FutureProofMessage`.
 fn sticker_of(base: &wa::Message) -> Option<&wa::message::StickerMessage> {
-    base.sticker_message.as_option().or_else(|| {
-        base.lottie_sticker_message
-            .as_option()?
-            .message
-            .as_option()?
-            .sticker_message
-            .as_option()
-    })
+    base.sticker_message
+        .as_option()
+        .or_else(|| {
+            base.lottie_sticker_message
+                .as_option()?
+                .message
+                .as_option()?
+                .sticker_message
+                .as_option()
+        })
+        .or_else(|| {
+            base.audio_sticker_message
+                .as_option()?
+                .message
+                .as_option()?
+                .sticker_message
+                .as_option()
+        })
+}
+
+/// Extracts the audio clip embedded inside a WhatsApp audio sticker, if any.
+fn sticker_audio_of(base: &wa::Message) -> Option<&wa::message::AudioMessage> {
+    if let Some(audio) = sticker_of(base).and_then(|sticker| sticker.audio.as_ref()) {
+        #[allow(unreachable_patterns)]
+        match audio {
+            wa::message::sticker_message::Audio::AudioMessage(inner) => return Some(inner.as_ref()),
+            _ => {}
+        }
+    }
+    base.audio_sticker_message
+        .as_option()?
+        .message
+        .as_option()?
+        .audio_message
+        .as_option()
 }
 
 /// Converts a protocol message to visible content, or `None` for internal
@@ -13088,6 +13181,13 @@ fn classify_base(base: &wa::Message) -> Option<Content> {
         return Some(Content::Sticker {
             media: attachment,
             animated: lottie || sticker.is_animated.unwrap_or(false),
+            audio: sticker_audio_of(base).map(|audio| {
+                let mut track = media(audio.mimetype.as_ref(), audio.file_length, None, None);
+                if track.mime.is_empty() {
+                    track.mime = "audio/ogg; codecs=opus".to_owned();
+                }
+                track
+            }),
         });
     }
     if let Some(location) = base.location_message.as_option() {
@@ -13880,6 +13980,7 @@ async fn prepare_sticker(client: &Client, bytes: Vec<u8>) -> Result<Prepared, St
                 Some(height),
             ),
             animated,
+            audio: None,
         },
         thumbnail: None,
         bytes,
@@ -27218,6 +27319,7 @@ mod saved_download_tests {
         message.content = Content::Sticker {
             media: message.content.media().unwrap().clone(),
             animated: false,
+            audio: None,
         };
         worker.archive.insert_message(&message, None).unwrap();
         let key = (message.chat.clone(), message.id.clone());
@@ -27790,7 +27892,7 @@ mod lottie_sticker_tests {
         let content = classify(&message).expect("recognized Lottie");
         assert!(matches!(
             content,
-            Content::Sticker { media, animated: true } if media.mime == "application/was"
+            Content::Sticker { media, animated: true, .. } if media.mime == "application/was"
         ));
         assert!(sticker_of(message.get_base_message()).is_some());
     }
@@ -27803,7 +27905,42 @@ mod lottie_sticker_tests {
         message.sticker_message = MessageField::some(sticker);
         assert!(matches!(
             classify(&message),
-            Some(Content::Sticker { media, animated: false }) if media.mime == "image/webp"
+            Some(Content::Sticker { media, animated: false, audio: None }) if media.mime == "image/webp"
+        ));
+    }
+
+    #[test]
+    fn recognizes_audio_stickers_in_both_direct_and_future_proof_forms() {
+        let mut audio = wa::message::AudioMessage::default();
+        audio.mimetype = Some("audio/ogg; codecs=opus".to_owned());
+        audio.file_length = Some(4096);
+
+        let mut sticker = wa::message::StickerMessage::default();
+        sticker.mimetype = Some("image/webp".to_owned());
+        sticker.is_animated = Some(true);
+        sticker.audio = Some(audio.clone().into());
+
+        let mut direct = wa::Message::default();
+        direct.sticker_message = MessageField::some(sticker);
+        assert!(matches!(
+            classify(&direct),
+            Some(Content::Sticker { animated: true, audio: Some(track), .. })
+                if track.mime == "audio/ogg; codecs=opus" && track.size == 4096
+        ));
+
+        let mut inner_sticker = wa::message::StickerMessage::default();
+        inner_sticker.mimetype = Some("image/webp".to_owned());
+        let mut inner = wa::Message::default();
+        inner.sticker_message = MessageField::some(inner_sticker);
+        inner.audio_message = MessageField::some(audio);
+        let mut wrapper = wa::message::FutureProofMessage::default();
+        wrapper.message = MessageField::some(inner);
+        let mut wrapped = wa::Message::default();
+        wrapped.audio_sticker_message = MessageField::some(wrapper);
+        assert!(matches!(
+            classify(&wrapped),
+            Some(Content::Sticker { audio: Some(track), .. })
+                if track.mime == "audio/ogg; codecs=opus" && track.size == 4096
         ));
     }
 }

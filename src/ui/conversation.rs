@@ -951,7 +951,7 @@ fn header(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> Rect {
                         let back_label = if app.page == crate::model::Page::Calls {
                             crate::i18n::gettext(app.locale, "Back to the calls").into_owned()
                         } else {
-                            "Back to chats".to_owned()
+                            crate::i18n::gettext(app.locale, "Back to chats").into_owned()
                         };
                         let back = theme::icon_button(
                             ui,
@@ -1538,7 +1538,7 @@ fn composer(app: &mut App, ui: &mut egui::Ui, chat: &Chat, review_send: Option<b
                             } else {
                                 crate::i18n::gettext(
                                     app.locale,
-                                    "Channels are read-only in ZapFast",
+                                    "Channels are read-only in Supp",
                                 )
                             }
                             .as_ref(),
@@ -1566,17 +1566,29 @@ fn composer(app: &mut App, ui: &mut egui::Ui, chat: &Chat, review_send: Option<b
                             palette.secondary,
                         );
                     } else {
+                        let notice = crate::i18n::gettext(
+                            app.locale,
+                            "Only {admins} can send messages",
+                        );
+                        let admins_word = crate::i18n::gettext(app.locale, "admins");
+                        let (before, after) = notice
+                            .split_once("{admins}")
+                            .unwrap_or((notice.as_ref(), ""));
                         ui.horizontal(|ui| {
-                            let width = 230.0;
+                            ui.spacing_mut().item_spacing.x = 0.0;
+                            let width = ui
+                                .painter()
+                                .layout_no_wrap(
+                                    format!("{before}{admins_word}{after}"),
+                                    theme::semibold(13.5),
+                                    palette.secondary,
+                                )
+                                .size()
+                                .x;
                             ui.add_space((ui.available_width() - width).max(0.0) / 2.0);
-                            theme::text(ui, "Only", theme::regular(13.5), palette.secondary);
-                            theme::text(ui, "admins", theme::semibold(13.5), palette.accent);
-                            theme::text(
-                                ui,
-                                "can send messages",
-                                theme::regular(13.5),
-                                palette.secondary,
-                            );
+                            theme::text(ui, before, theme::regular(13.5), palette.secondary);
+                            theme::text(ui, admins_word, theme::semibold(13.5), palette.accent);
+                            theme::text(ui, after, theme::regular(13.5), palette.secondary);
                         });
                     }
                     ui.add_space(8.0);
@@ -1688,7 +1700,8 @@ fn composer(app: &mut App, ui: &mut egui::Ui, chat: &Chat, review_send: Option<b
                 .painter()
                 .layout_no_wrap("x".to_owned(), theme::regular(BODY_SIZE), palette.text)
                 .size()
-                .y;
+                .y
+                .max(ui.fonts_mut(|fonts| fonts.row_height(&theme::regular(BODY_SIZE))));
             // Every control sits in a band as tall as a one-line field at the
             // bottom of the row, centred on it. The field grows to six lines
             // above that band, so the buttons stay beside its last line.
@@ -1706,7 +1719,7 @@ fn composer(app: &mut App, ui: &mut egui::Ui, chat: &Chat, review_send: Option<b
             // field and the panel holding it grow on the keystroke that wraps
             // a line rather than a frame later, which made them jump.
             let wrap_id = id.with("wrap");
-            let text_height = ui
+            let raw_height = ui
                 .ctx()
                 .data(|data| data.get_temp::<f32>(wrap_id))
                 .map(|wrap| {
@@ -1718,8 +1731,10 @@ fn composer(app: &mut App, ui: &mut egui::Ui, chat: &Chat, review_send: Option<b
                         .y
                 })
                 .or_else(|| ui.ctx().read_response(id).map(|previous| previous.rect.height()))
-                .unwrap_or(line_height)
-                .clamp(line_height, line_height * 6.0);
+                .unwrap_or(line_height);
+            let max_height = line_height * 6.0;
+            let composer_overflows = raw_height > max_height + 0.5;
+            let text_height = raw_height.clamp(line_height, max_height);
             let row_height = (text_height + 2.0 * field_margin).max(line);
             let pill = widgets::raised(ui, &palette, composer_pill(&palette), |ui| {
             ui.allocate_ui_with_layout(
@@ -1746,6 +1761,7 @@ fn composer(app: &mut App, ui: &mut egui::Ui, chat: &Chat, review_send: Option<b
                     composer_tools_menu(app, chat, &tools);
                     // Plus and emoji sit close together, as a pair.
                     ui.add_space(COMPOSER_PAIR_GAP - ui.spacing().item_spacing.x);
+                    let emoji_label = crate::i18n::gettext(app.locale, "Emoji, GIFs, and stickers");
                     let smile = last_line(ui, line, |ui| theme::icon_button(
                         ui,
                         Icon::Smile,
@@ -1756,7 +1772,7 @@ fn composer(app: &mut App, ui: &mut egui::Ui, chat: &Chat, review_send: Option<b
                             palette.secondary
                         },
                         palette.text,
-                        "Emoji, GIFs, and stickers",
+                        &emoji_label,
                     )).tab_stop(Stop::Emoji);
                     app.picker_anchor = Some(smile.rect);
                     if smile.clicked() {
@@ -1805,6 +1821,17 @@ fn composer(app: &mut App, ui: &mut egui::Ui, chat: &Chat, review_send: Option<b
                             .id_salt("composer-scroll")
                             .max_height(text_height)
                             .min_scrolled_height(text_height)
+                            .scroll_bar_visibility(if composer_overflows {
+                                egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded
+                            } else {
+                                egui::scroll_area::ScrollBarVisibility::AlwaysHidden
+                            })
+                            .vscroll(composer_overflows)
+                            .scroll_source(if composer_overflows {
+                                egui::scroll_area::ScrollSource::default()
+                            } else {
+                                egui::scroll_area::ScrollSource::NONE
+                            })
                             .auto_shrink([false, false])
                             .show(ui, |ui| {
                                 // Keep emoji in the buffer so character offsets match, then
@@ -2465,15 +2492,21 @@ fn edit_strip(app: &mut App, ui: &mut egui::Ui) {
         ui.set_width(ui.available_width());
         ui.horizontal(|ui| {
             theme::icon(ui, Icon::Pencil, 16.0, palette.accent);
-            theme::text(ui, "Editing message", theme::semibold(12.5), palette.accent);
+            theme::text(
+                ui,
+                crate::i18n::gettext(app.locale, "Editing message"),
+                theme::semibold(12.5),
+                palette.accent,
+            );
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                let stop = crate::i18n::gettext(app.locale, "Stop editing (Esc)");
                 if theme::icon_button(
                     ui,
                     Icon::X,
                     16.0,
                     palette.secondary,
                     palette.text,
-                    "Stop editing (Esc)",
+                    &stop,
                 )
                 .clicked()
                 {
@@ -2501,22 +2534,20 @@ fn reply_strip(app: &mut App, ui: &mut egui::Ui, quoted: &Message) {
             ui.vertical(|ui| {
                 ui.spacing_mut().item_spacing.y = 1.0;
                 ui.set_max_width((ui.available_width() - 40.0).max(0.0));
-                widgets::rich_text(
-                    ui,
-                    &format!("Replying to {who}"),
-                    theme::semibold(12.5),
-                    palette.accent,
-                );
+                let replying = crate::i18n::gettext(app.locale, "Replying to {who}")
+                    .replace("{who}", &who);
+                widgets::rich_text(ui, &replying, theme::semibold(12.5), palette.accent);
                 widgets::rich_text(ui, &summary, theme::regular(12.5), palette.secondary);
             });
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                let cancel = crate::i18n::gettext(app.locale, "Cancel reply (Esc)");
                 if theme::icon_button(
                     ui,
                     Icon::X,
                     16.0,
                     palette.secondary,
                     palette.text,
-                    "Cancel reply (Esc)",
+                    &cancel,
                 )
                 .clicked()
                 {
@@ -3455,7 +3486,7 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                     if under > 0.0 {
                         ui.add_space(under);
                     }
-                    top_of_history(ui, &palette, &conversation, chat, &mut actions);
+                    top_of_history(ui, &palette, view.locale, &conversation, chat, &mut actions);
                     let mut previous: Option<&Message> = None;
                     let mut day_separator_top = f32::NEG_INFINITY;
                     // The pin notices still to place, in time order. Each one
@@ -4455,6 +4486,7 @@ fn floating_circle(ui: &egui::Ui, palette: &Palette, rect: Rect, hovered: bool) 
 fn top_of_history(
     ui: &mut egui::Ui,
     palette: &Palette,
+    locale: crate::i18n::Locale,
     conversation: &Conversation,
     _chat: &Chat,
     _actions: &mut [Action],
@@ -4473,7 +4505,7 @@ fn top_of_history(
                 theme::spinner(ui, 16.0, palette.accent);
                 theme::text(
                     ui,
-                    "Loading older messages from your phone…",
+                    crate::i18n::gettext(locale, "Loading older messages from your phone…"),
                     theme::regular(12.5),
                     palette.secondary,
                 );
@@ -4481,9 +4513,17 @@ fn top_of_history(
         } else if conversation.messages.is_empty() {
             ui.add_space(24.0);
             if conversation.fetching_phone {
-                widgets::chip(ui, palette, "Loading messages from your phone…");
+                widgets::chip(
+                    ui,
+                    palette,
+                    &crate::i18n::gettext(locale, "Loading messages from your phone…"),
+                );
             } else {
-                widgets::chip(ui, palette, "No messages here yet");
+                widgets::chip(
+                    ui,
+                    palette,
+                    &crate::i18n::gettext(locale, "No messages here yet"),
+                );
             }
         } else {
             ui.add_space(6.0);
@@ -5627,7 +5667,9 @@ fn bubble_frame(
             // Reserve the label's line now and paint it once the contents
             // are measured, at their start: an own bubble lays out from the
             // right, and its width is known only then.
-            let forwarded = message.forwarded.then(|| forwarded_label(ui, &palette));
+            let forwarded = message
+                .forwarded
+                .then(|| forwarded_label(ui, &palette, view.locale));
             // Cards share the bubble's settled width: at least CARD_WIDTH and
             // no more than the cap. Text spans that width and stays left-aligned.
             // Bubbles without cards use the natural text width.
@@ -6397,10 +6439,15 @@ const FORWARDED_HEIGHT: f32 = 15.0;
 /// Reserves the line for a forwarded message's label at the top of its
 /// bubble and returns that space with the laid-out word, for
 /// [`paint_forwarded_label`] once the bubble's contents are measured.
-fn forwarded_label(ui: &mut egui::Ui, palette: &Palette) -> (Rect, std::sync::Arc<egui::Galley>) {
+fn forwarded_label(
+    ui: &mut egui::Ui,
+    palette: &Palette,
+    locale: crate::i18n::Locale,
+) -> (Rect, std::sync::Arc<egui::Galley>) {
+    let text = crate::i18n::gettext(locale, "Forwarded");
     let mut job = egui::text::LayoutJob::default();
     job.append(
-        "Forwarded",
+        &text,
         0.0,
         egui::TextFormat {
             font_id: theme::regular(12.5),
@@ -6413,7 +6460,7 @@ fn forwarded_label(ui: &mut egui::Ui, palette: &Palette) -> (Rect, std::sync::Ar
     let width = FORWARDED_ICON + FORWARDED_GAP + galley.size().x;
     let (reserved, response) =
         ui.allocate_exact_size(vec2(width, FORWARDED_HEIGHT), Sense::hover());
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, "Forwarded"));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, text.as_ref()));
     // Sit closer to what follows than the bubble's usual spacing.
     ui.add_space(-1.0);
     (reserved, galley)
@@ -8233,8 +8280,15 @@ fn content(
                 )
             }
         }
-        Content::Sticker { media, animated } => {
-            picture(ui, view, message, media, width, Some(*animated), actions);
+        Content::Sticker {
+            media,
+            animated,
+            audio,
+        } => {
+            let drawn = picture(ui, view, message, media, width, Some(*animated), actions);
+            if let Some(audio) = audio {
+                sticker_audio_button(ui, view, message, audio, drawn, actions);
+            }
             None
         }
         Content::Video {
@@ -9264,7 +9318,10 @@ fn carousel_picture(
                 ui.painter().text(
                     rect.center() + vec2(0.0, 24.0),
                     Align2::CENTER_CENTER,
-                    "Could not display this picture. Click to open it.",
+                    crate::i18n::gettext(
+                        view.locale,
+                        "Could not display this picture. Click to open it.",
+                    ),
                     theme::regular(11.5),
                     view.palette.secondary,
                 );
@@ -10165,7 +10222,7 @@ fn picture(
             let (rect, response) = ui.allocate_exact_size(size, Sense::click());
             let mut unreadable = false;
             if ui.is_rect_visible(rect) {
-                match animation::frame(ui, path, rect, view.animate && response.hovered()) {
+                match animation::frame(ui, path, rect, view.animate) {
                     animation::Frame::Ready(texture) => {
                         ui.painter().image(
                             texture.id(),
@@ -10183,11 +10240,18 @@ fn picture(
                     }
                 }
             }
+            let has_audio_badge =
+                matches!(message.content, Content::Sticker { audio: Some(_), .. });
+            let on_audio_badge = has_audio_badge
+                && response
+                    .interact_pointer_pos()
+                    .is_some_and(|pos| sticker_audio_badge_rect(rect).contains(pos));
             if unreadable {
                 actions.push(unreadable_media(view, message, path));
             } else if response
                 .on_hover_cursor(egui::CursorIcon::PointingHand)
                 .clicked()
+                && !on_audio_badge
             {
                 actions.push(Action::PreviewSticker(path.clone()));
             }
@@ -10230,9 +10294,16 @@ fn picture(
                         .sense(Sense::click()),
                 );
                 let rect = response.rect;
+                let has_audio_badge =
+                    matches!(message.content, Content::Sticker { audio: Some(_), .. });
+                let on_audio_badge = has_audio_badge
+                    && response
+                        .interact_pointer_pos()
+                        .is_some_and(|pos| sticker_audio_badge_rect(rect).contains(pos));
                 if response
                     .on_hover_cursor(egui::CursorIcon::PointingHand)
                     .clicked()
+                    && !on_audio_badge
                 {
                     let action = match sticker {
                         Some(_) => Action::PreviewSticker(path.clone()),
@@ -10296,7 +10367,10 @@ fn picture(
                     ui.painter().text(
                         rect.center() + vec2(0.0, 24.0),
                         Align2::CENTER_CENTER,
-                        "Could not display this picture. Click to open it.",
+                        crate::i18n::gettext(
+                            view.locale,
+                            "Could not display this picture. Click to open it.",
+                        ),
                         theme::regular(11.5),
                         palette.secondary,
                     );
@@ -10396,6 +10470,70 @@ fn picture(
         });
     }
     rect
+}
+
+fn sticker_audio_badge_rect(rect: Rect) -> Rect {
+    Rect::from_min_size(
+        pos2(rect.right() - 32.0, rect.bottom() - 32.0),
+        Vec2::splat(28.0),
+    )
+}
+
+/// Draws the bottom-right speaker pill on an audio sticker and toggles
+/// download/playback when clicked.
+fn sticker_audio_button(
+    ui: &mut egui::Ui,
+    view: &View<'_>,
+    message: &Message,
+    audio: &Media,
+    sticker: Rect,
+    actions: &mut Vec<Action>,
+) {
+    use crate::audio::State;
+    if !ui.is_rect_visible(sticker) {
+        return;
+    }
+    let badge = sticker_audio_badge_rect(sticker);
+    let response = ui
+        .interact(
+            badge,
+            bubble_id(&view.chat.id, &message.id).with("sticker-audio"),
+            Sense::click(),
+        )
+        .on_hover_cursor(egui::CursorIcon::PointingHand);
+    if response.clicked() {
+        actions.push(Action::ToggleStickerAudio {
+            chat: view.chat.id.clone(),
+            message: message.id.clone(),
+        });
+    }
+    let playing = matches!(view.player.status(&message.id).state, State::Playing { .. });
+    let fill = if playing {
+        view.palette.accent
+    } else if response.hovered() {
+        Color32::from_black_alpha(190)
+    } else {
+        Color32::from_black_alpha(150)
+    };
+    ui.painter().circle_filled(badge.center(), 14.0, fill);
+    if matches!(audio.state, MediaState::Downloading) {
+        theme::paint_spinner(ui, badge, 15.0, view.palette.accent);
+    } else {
+        let (icon, color) = if playing {
+            (Icon::Pause, view.palette.on_accent)
+        } else if matches!(audio.state, MediaState::Failed(_)) {
+            (Icon::CircleAlert, view.palette.danger)
+        } else {
+            (Icon::Volume2, Color32::WHITE)
+        };
+        theme::paint_icon(ui, icon, badge, 14.0, color);
+    }
+    let tooltip = match &audio.state {
+        MediaState::Failed(error) => error.as_str().into(),
+        _ if playing => crate::i18n::gettext(view.locale, "Pause sticker audio"),
+        _ => crate::i18n::gettext(view.locale, "Play sticker audio"),
+    };
+    response.on_hover_text(tooltip);
 }
 
 /// Reports a downloaded picture or sticker that could not be drawn, so the app
@@ -13477,6 +13615,7 @@ mod reaction_tests {
             row(Content::Sticker {
                 media: media("image/webp", path, Idle),
                 animated: false,
+                audio: None,
             }),
         ]
     }

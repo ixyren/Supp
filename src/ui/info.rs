@@ -843,17 +843,23 @@ fn actions(app: &mut App, ui: &mut egui::Ui, shown: &Shown, mine: bool, editable
             vec![Action::CopyText(format!("+{phone}"))],
         ));
     }
+    let unmute_label = crate::i18n::gettext(app.locale, "Unmute");
+    let mute_label = crate::i18n::gettext(app.locale, "Mute");
+    let unpin_label = crate::i18n::gettext(app.locale, "Unpin");
+    let pin_label = crate::i18n::gettext(app.locale, "Pin");
+    let unarchive_label = crate::i18n::gettext(app.locale, "Unarchive");
+    let archive_label = crate::i18n::gettext(app.locale, "Archive");
     if shown.has_chat {
         buttons.push(if shown.muted {
             (
                 Icon::Bell,
-                "Unmute",
+                unmute_label.as_ref(),
                 vec![Action::SetMuted(id.to_owned(), None)],
             )
         } else {
             (
                 Icon::BellOff,
-                "Mute",
+                mute_label.as_ref(),
                 vec![Action::SetMuted(id.to_owned(), Some(0))],
             )
         });
@@ -863,15 +869,19 @@ fn actions(app: &mut App, ui: &mut egui::Ui, shown: &Shown, mine: bool, editable
             } else {
                 Icon::Pin
             },
-            if shown.pinned { "Unpin" } else { "Pin" },
+            if shown.pinned {
+                unpin_label.as_ref()
+            } else {
+                pin_label.as_ref()
+            },
             vec![Action::SetPinned(id.to_owned(), !shown.pinned)],
         ));
         buttons.push((
             Icon::Archive,
             if shown.archived {
-                "Unarchive"
+                unarchive_label.as_ref()
             } else {
-                "Archive"
+                archive_label.as_ref()
             },
             vec![
                 Action::SetArchived(id.to_owned(), !shown.archived),

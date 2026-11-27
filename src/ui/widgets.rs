@@ -1168,23 +1168,54 @@ pub fn switch(ui: &mut Ui, palette: &Palette, on: &mut bool) -> egui::Response {
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
-/// The author's website, linked from the credit line.
-pub const AUTHOR_URL: &str = "https://paolino.me";
+/// The author's GitHub profile, linked from the credit line.
+pub const AUTHOR_URL: &str = "https://github.com/ixyren";
+/// Upstream ZapFast repository URL.
+pub const ZAPFAST_URL: &str = "https://github.com/crmne/zapfast";
+/// Original ZapFast author website URL.
+pub const CARMINE_URL: &str = "https://paolino.me";
 
-/// "Built with love by Carmine Paolino", with the name linking to
-/// [`AUTHOR_URL`]. Returns whether the name was clicked.
-pub fn credit(ui: &mut Ui, palette: &Palette, locale: crate::i18n::Locale) -> bool {
+/// Draws the credit lines naming ZapFast (Carmine Paolino) and Supp (iXyren),
+/// returning the URL if any author/project link was clicked.
+pub fn credit(ui: &mut Ui, palette: &Palette, locale: crate::i18n::Locale) -> Option<&'static str> {
+    let mut clicked = None;
+    let origin = crate::i18n::gettext(locale, "Based on {project}, a project by {original}.");
+    let (before_project, rest_origin) = origin.split_once("{project}").unwrap_or((&origin, ""));
+    let (between_origin, after_origin) =
+        rest_origin.split_once("{original}").unwrap_or((rest_origin, ""));
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
+        theme::text(ui, before_project, theme::regular(13.0), palette.secondary);
+        if theme::link(ui, "ZapFast", theme::medium(13.0), palette.link)
+            .on_hover_text(ZAPFAST_URL)
+            .clicked()
+        {
+            clicked = Some(ZAPFAST_URL);
+        }
+        theme::text(ui, between_origin, theme::regular(13.0), palette.secondary);
+        if theme::link(ui, "Carmine Paolino", theme::medium(13.0), palette.link)
+            .on_hover_text(CARMINE_URL)
+            .clicked()
+        {
+            clicked = Some(CARMINE_URL);
+        }
+        if !after_origin.is_empty() {
+            theme::text(ui, after_origin, theme::regular(13.0), palette.secondary);
+        }
+    });
     // Translators: {name} is replaced by the author's name, shown as a link.
     let sentence = crate::i18n::gettext(locale, "Built with love by {name}");
     let (before, after) = sentence.split_once("{name}").unwrap_or((&sentence, ""));
-    let mut clicked = false;
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
         theme::text(ui, "\u{2665}  ", theme::regular(13.0), palette.danger);
         theme::text(ui, before, theme::regular(13.0), palette.secondary);
-        clicked = theme::link(ui, "Carmine Paolino", theme::medium(13.0), palette.link)
+        if theme::link(ui, "iXyren", theme::medium(13.0), palette.link)
             .on_hover_text(AUTHOR_URL)
-            .clicked();
+            .clicked()
+        {
+            clicked = Some(AUTHOR_URL);
+        }
         if !after.is_empty() {
             theme::text(ui, after, theme::regular(13.0), palette.secondary);
         }

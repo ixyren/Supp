@@ -1788,8 +1788,8 @@ fn sticker_grid(
     }
 }
 
-/// Draws one sticker tile. Only visible animated stickers decode, and they
-/// keep a still first frame until the focused pointer hovers the tile.
+/// Draws one sticker tile. Only visible animated stickers decode and animate
+/// continuously while displayed.
 fn paint_tile(
     ui: &mut egui::Ui,
     palette: &Palette,
@@ -1807,7 +1807,7 @@ fn paint_tile(
     let shown = rect.shrink(4.0);
     let animated = moves(ui.ctx(), path);
     let played = animated
-        && match crate::animation::frame(ui, path, rect, animate && hovered) {
+        && match crate::animation::frame(ui, path, rect, animate) {
             crate::animation::Frame::Ready(texture) => {
                 let size = texture.size_vec2();
                 let scale = (shown.width() / size.x).min(shown.height() / size.y);

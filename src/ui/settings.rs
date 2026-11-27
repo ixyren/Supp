@@ -254,13 +254,14 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     ui.add_space(room.top);
                     ui.horizontal(|ui| {
                         ui.add_space(room.left);
+                        let back_label = crate::i18n::gettext(locale, "Back (Esc)");
                         if theme::icon_button(
                             ui,
                             Icon::ArrowLeft,
                             20.0,
                             palette.secondary,
                             palette.text,
-                            "Back (Esc)",
+                            &back_label,
                         )
                         .clicked()
                         {
@@ -1242,7 +1243,7 @@ pub fn wallpaper_show(app: &mut App, ui: &mut egui::Ui) {
     ui.with_layout(
         Layout::left_to_right(Align::Min).with_main_align(Align::Min),
         |ui| {
-            const HEADER_HEIGHT: f32 = 52.0;
+            const HEADER_HEIGHT: f32 = theme::TOP_BAR_HEIGHT;
             const MIN_PREVIEW_WIDTH: f32 = 180.0;
             let total_width = ui.available_width();
             let left_width = (total_width * 0.42)
@@ -1255,39 +1256,57 @@ pub fn wallpaper_show(app: &mut App, ui: &mut egui::Ui) {
                 Layout::top_down(Align::Min).with_main_align(Align::Min),
                 |ui| {
                     let section = ui.max_rect();
-                    let header = Rect::from_min_size(
+                    let base_header = Rect::from_min_size(
                         section.left_top(),
                         vec2(left_width, HEADER_HEIGHT),
                     );
+                    let left_room = super::caption_room(ui.ctx(), base_header, 180.0);
+                    let header_height = HEADER_HEIGHT + left_room.top;
+                    let header = Rect::from_min_size(
+                        section.left_top(),
+                        vec2(left_width, header_height),
+                    );
                     ui.painter().rect_filled(header, 0.0, palette.panel);
+                    super::caption_drag(ui, header);
+                    let content_rect = Rect::from_min_max(
+                        header.min + vec2(0.0, left_room.top),
+                        header.max,
+                    );
                     ui.scope_builder(
                         egui::UiBuilder::new()
-                            .max_rect(header)
+                            .max_rect(content_rect)
                             .layout(
                                 Layout::left_to_right(Align::Center)
                                     .with_main_align(Align::Min),
                             ),
                         |ui| {
-                            ui.add_space(24.0);
+                            ui.add_space(24.0_f32.max(left_room.left + 8.0));
+                            let back_label =
+                                crate::i18n::gettext(app.locale, "Back to settings");
                             if theme::icon_button(
                                 ui,
                                 Icon::ArrowLeft,
                                 20.0,
                                 palette.secondary,
                                 palette.text,
-                                "Back to settings",
+                                &back_label,
                             )
                             .clicked()
                             {
                                 app.actions.push(Action::Open(Page::Settings));
                             }
-                            theme::text(ui, "Set chat wallpaper", theme::bold(18.0), palette.text);
+                            theme::text(
+                                ui,
+                                crate::i18n::gettext(app.locale, "Set chat wallpaper"),
+                                theme::bold(18.0),
+                                palette.text,
+                            );
                         },
                     );
 
                     let palette_rect = Rect::from_min_size(
                         pos2(section.left() + 20.0, header.bottom() + 20.0),
-                        vec2(palette_width, (body_height - HEADER_HEIGHT - 20.0).max(0.0)),
+                        vec2(palette_width, (body_height - header_height - 20.0).max(0.0)),
                     );
                     ui.scope_builder(
                         egui::UiBuilder::new()
@@ -1358,21 +1377,32 @@ pub fn wallpaper_show(app: &mut App, ui: &mut egui::Ui) {
                 Layout::top_down(Align::Min).with_main_align(Align::Min),
                 |ui| {
                     let section = ui.max_rect();
-                    let header = Rect::from_min_size(
+                    let base_header = Rect::from_min_size(
                         section.left_top(),
                         vec2(preview_width, HEADER_HEIGHT),
                     );
+                    let right_room = super::caption_room(ui.ctx(), base_header, 160.0);
+                    let header_height = HEADER_HEIGHT + right_room.top;
+                    let header = Rect::from_min_size(
+                        section.left_top(),
+                        vec2(preview_width, header_height),
+                    );
                     ui.painter().rect_filled(header, 0.0, palette.panel);
+                    super::caption_drag(ui, header);
+                    let title_rect = Rect::from_min_max(
+                        header.min + vec2(right_room.left, right_room.top),
+                        header.max - vec2(right_room.right, 0.0),
+                    );
                     ui.painter().text(
-                        header.center(),
+                        title_rect.center(),
                         egui::Align2::CENTER_CENTER,
-                        "Wallpaper preview",
+                        crate::i18n::gettext(app.locale, "Wallpaper preview"),
                         theme::bold(18.0),
                         palette.text,
                     );
                     let preview = Rect::from_min_size(
                         header.left_bottom(),
-                        vec2(preview_width, (body_height - HEADER_HEIGHT).max(0.0)),
+                        vec2(preview_width, (body_height - header_height).max(0.0)),
                     );
                     // The same look the chat draws, image and theme colour included.
                     wallpaper::paint_rect(ui, preview, &app.wallpaper());
@@ -1878,9 +1908,8 @@ fn about(app: &mut App, ui: &mut egui::Ui) {
         }
     });
     ui.add_space(14.0);
-    if widgets::credit(ui, &palette, app.locale) {
-        app.actions
-            .push(Action::OpenUrl(widgets::AUTHOR_URL.to_owned()));
+    if let Some(url) = widgets::credit(ui, &palette, app.locale) {
+        app.actions.push(Action::OpenUrl(url.to_owned()));
     }
 }
 
@@ -1976,13 +2005,18 @@ fn sound_control(ui: &mut egui::Ui, app: &mut App, mention: bool) {
     let choices = [
         (NotificationSound::Receive, "Pidgin".into()),
         (NotificationSound::Alert, gettext(locale, "Pidgin alert")),
+        (NotificationSound::Shutter, gettext(locale, "Shutter")),
+        (
+            NotificationSound::ShutterMention,
+            gettext(locale, "Shutter mention"),
+        ),
         (NotificationSound::System, gettext(locale, "System default")),
         // Translators: no notification sound.
         (NotificationSound::None, pgettext(locale, "sound", "None")),
     ];
     let selected = match &current {
         NotificationSound::Custom(path) => path.file_name().map_or_else(
-            || "Custom".to_owned(),
+            || gettext(locale, "Custom").into_owned(),
             |name| name.to_string_lossy().into_owned(),
         ),
         sound => choices

@@ -674,9 +674,10 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
 fn start(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     let locale = app.locale;
+    let top_inset = theme::caption_footprint(ui.ctx()).height;
     let height = ui.available_height();
     ui.vertical_centered(|ui| {
-        ui.add_space((height / 2.0 - 110.0).max(24.0));
+        ui.add_space((height / 2.0 - 110.0).max(top_inset + 16.0));
         let label = gettext(locale, "Start call");
         let response = theme::circle_button(
             ui,

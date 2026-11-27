@@ -1036,7 +1036,8 @@ fn shortcuts(app: &mut App, ui: &mut egui::Ui) {
                             ui.set_width(column);
                             ui.spacing_mut().item_spacing = vec2(18.0, 8.0);
                             for (keys, what) in rows {
-                                shortcut_row(ui, &palette, keys_width, keys, what);
+                                let label = crate::i18n::gettext(app.locale, what);
+                                shortcut_row(ui, &palette, keys_width, keys, &label);
                             }
                         },
                     );
@@ -1110,9 +1111,8 @@ fn about(app: &mut App, ui: &mut egui::Ui) {
         }
     });
     ui.add_space(4.0);
-    if super::widgets::credit(ui, &palette, app.locale) {
-        app.actions
-            .push(Action::OpenUrl(super::widgets::AUTHOR_URL.to_owned()));
+    if let Some(url) = super::widgets::credit(ui, &palette, app.locale) {
+        app.actions.push(Action::OpenUrl(url.to_owned()));
     }
 }
 

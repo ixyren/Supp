@@ -354,6 +354,11 @@ pub enum Command {
         chat: ChatId,
         message: String,
     },
+    /// Downloads an audio sticker's audio track.
+    DownloadStickerAudio {
+        chat: ChatId,
+        message: String,
+    },
     /// Requests a profile picture; `full` selects the info-dialog size.
     FetchAvatar {
         id: String,
@@ -1032,6 +1037,12 @@ pub enum Command {
         id: String,
         result: Result<PathBuf, String>,
     },
+    /// Internal audio-sticker audio download result.
+    StickerAudioDownloaded {
+        chat: ChatId,
+        id: String,
+        result: Result<PathBuf, String>,
+    },
     /// Internal recent-sticker download result.
     StickerFetched {
         hash: String,
@@ -1465,6 +1476,12 @@ pub enum Event {
     },
     /// A motion photo's clip finished downloading, or failed.
     Motion {
+        chat: ChatId,
+        message: String,
+        result: Result<PathBuf, String>,
+    },
+    /// An audio sticker's audio clip finished downloading, or failed.
+    StickerAudioDownloaded {
         chat: ChatId,
         message: String,
         result: Result<PathBuf, String>,
