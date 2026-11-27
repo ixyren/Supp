@@ -3407,7 +3407,13 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                 .data(|data| data.get_temp::<f32>(text_selection_id.with("painted-offset")))
         })
         .flatten();
-    let scroll = egui::ScrollArea::vertical();
+    let list_clip = list.intersect(ui.clip_rect());
+    let scroll_max_width = if list_clip.is_positive() {
+        list_clip.width()
+    } else {
+        list.width()
+    };
+    let scroll = egui::ScrollArea::vertical().max_width(scroll_max_width);
     let scroll = if let Some(offset) = selection_offset {
         scroll.vertical_scroll_offset(offset)
     } else {
@@ -3427,6 +3433,10 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
             // Scroll while selecting near an edge. `scroll_with_delta` also
             // releases stick-to-bottom; setting the offset directly does not.
             let viewport = ui.clip_rect();
+            let visible_width = (viewport.right() - ui.max_rect().left())
+                .min(viewport.width())
+                .max(0.0);
+            ui.set_max_width(visible_width);
             ui.ctx().data_mut(|data| {
                 data.insert_temp(
                     text_selection_id.with("painted-offset"),
@@ -3502,10 +3512,22 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
             } else {
                 WHATSAPP_SIDE_MARGIN
             };
+            // Keep outgoing bubble tails, drop shadows, and borderless maximized
+            // right edges safely clear of the floating scrollbar and window clip.
+            let right_side = side + 12;
             let measured = Frame::new()
-                .inner_margin(Margin::symmetric(side, 10))
+                .inner_margin(Margin {
+                    left: side,
+                    right: right_side,
+                    top: 10,
+                    bottom: 10,
+                })
                 .show(ui, |ui| {
-                    ui.set_width(ui.available_width());
+                    let content_left = ui.max_rect().left();
+                    let content_right = (viewport.right() - f32::from(right_side)).max(content_left);
+                    let content_width = (content_right - content_left).max(0.0);
+                    ui.set_width(content_width);
+                    ui.set_max_width(content_width);
                     ui.spacing_mut().item_spacing.y = 3.0;
                     if under > 0.0 {
                         ui.add_space(under);
@@ -3644,11 +3666,16 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                             && !current
                             && !row_is_anchor
                             && divider.as_ref().is_none_or(|(id, ..)| !row_contains(id));
+                        let row_rect = Rect::from_min_max(
+                            pos2(content_left, ui.cursor().top()),
+                            pos2(content_right, ui.max_rect().bottom().max(ui.cursor().top())),
+                        );
                         let builder = super::list_nav::row_builder(
                             ui,
                             message_row_id(&chat.id, &message.id),
                             list_id,
-                        );
+                        )
+                        .max_rect(row_rect);
                         let row = ui.scope_builder(
                             if hidden { builder.invisible() } else { builder },
                             |ui| {
@@ -13858,6 +13885,130 @@ mod reaction_tests {
         let labels = message_menu_labels(crate::i18n::Locale::German);
         assert!(labels.iter().any(|label| label == "Markierung entfernen"));
         assert!(labels.iter().any(|label| label == "Markieren"));
+    }
+
+    #[test]
+    fn maximized_outgoing_messages_stay_inside_viewport() {
+        use crate::app::Conversation;
+        let directory = tempfile::tempdir().unwrap();
+        let (mut app, _events) = App::headless(
+            crate::paths::AppDirs::under(directory.path()),
+            crate::settings::Settings::default(),
+        );
+        app.link = crate::backend::LinkStatus::Connected;
+        let chat_id = "1@s.whatsapp.net".to_owned();
+        let mut chat = Chat::new(chat_id.clone(), "Ada".into());
+        chat.kind = crate::model::ChatKind::Direct;
+
+        let mut msgs = Vec::new();
+        for i in 0..26 {
+            let mut filler = crate::archive::tests::message(&chat_id, &format!("m-fill-{i}"), i + 1, i % 3 == 0);
+            filler.content = Content::text(format!("Mensaje previo #{i} para activar scroll vertical en la ventana."));
+            msgs.push(filler);
+        }
+
+        let mut short = crate::archive::tests::message(&chat_id, "m-short", 101, true);
+        short.content = Content::text("Hola!");
+        msgs.push(short);
+
+        let mut wrapped = crate::archive::tests::message(&chat_id, "m-wrap", 102, true);
+        wrapped.content = Content::text(
+            "Este es un mensaje largo de prueba enviado por mi para comprobar el ancho maximo en pantalla maximizada.",
+        );
+        msgs.push(wrapped);
+
+        let mut unbroken = crate::archive::tests::message(&chat_id, "m-url", 103, true);
+        unbroken.content = Content::text(
+            "https://example.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        );
+        msgs.push(unbroken);
+
+        let mut quoted = crate::archive::tests::message(&chat_id, "m-quote", 104, true);
+        quoted.content = Content::text("Respuesta");
+        quoted.forwarded = true;
+        quoted.reactions.push(crate::model::Reaction {
+            emoji: "👍".into(),
+            sender: chat_id.clone(),
+            from_me: false,
+        });
+        quoted.quoted = Some(crate::model::Quoted {
+            id: "m-short".into(),
+            chat: None,
+            sender: chat_id.clone(),
+            sender_name: Some("Ada".into()),
+            summary: "Cita de prueba".into(),
+            labelled: None,
+            mentions: Vec::new(),
+        });
+        msgs.push(quoted);
+        let checked_ids = ["m-short", "m-wrap", "m-url", "m-quote"];
+
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        app.account_mut().chats.push(chat);
+        app.account_mut().open_chat = Some(chat_id.clone());
+        app.account_mut().conversations.insert(
+            chat_id.clone(),
+            Conversation {
+                messages: msgs.clone(),
+                complete: true,
+                ..Default::default()
+            },
+        );
+
+        for (style_name, palette) in [
+            ("whatsapp", crate::theme::Palette::dark()),
+            ("messages", crate::theme::Palette::messages()),
+        ] {
+            app.palette = palette;
+            for (selecting, zoom, size) in [
+                (false, 1.0, vec2(1180.0, 780.0)),
+                (false, 1.0, vec2(1920.0, 1040.0)),
+                (false, 1.0, vec2(2560.0, 1400.0)),
+                (false, 1.25, vec2(1920.0, 1040.0)),
+                (true, 1.0, vec2(1920.0, 1040.0)),
+                (false, 1.0, vec2(1180.0, 780.0)),
+            ] {
+                ctx.set_zoom_factor(zoom);
+                app.selection = if selecting {
+                    Some((chat_id.clone(), vec!["m-short".into()]))
+                } else {
+                    None
+                };
+                for _ in 0..3 {
+                    let mut output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, size)),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            crate::ui::show(&mut app, ui);
+                        },
+                    );
+                    output.textures_delta.clear();
+                }
+
+                let view_rect = *app.selection_view.lock().unwrap();
+                let view_rect = view_rect.expect("selection_view recorded");
+                for id in checked_ids {
+                    let rect = ctx
+                        .data(|d| d.get_temp::<Rect>(bubble_id(&chat_id, id).with("rect")))
+                        .unwrap_or_else(|| panic!("{style_name} z={zoom} sel={selecting} {size:?} missing rect for {id}"));
+                    assert!(
+                        rect.right() + super::super::widgets::TAIL_WIDTH <= view_rect.right() - 12.0,
+                        "{style_name} z={zoom} sel={selecting} {size:?} msg={id} bubble tail right {} exceeds viewport right {} - 12 (rect={rect:?}, view={view_rect:?})",
+                        rect.right() + super::super::widgets::TAIL_WIDTH,
+                        view_rect.right(),
+                    );
+                    assert!(
+                        rect.left() >= view_rect.left(),
+                        "{style_name} z={zoom} sel={selecting} {size:?} msg={id} bubble left {} < viewport left {}",
+                        rect.left(),
+                        view_rect.left(),
+                    );
+                }
+            }
+        }
     }
 }
 

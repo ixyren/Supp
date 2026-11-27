@@ -390,13 +390,93 @@ impl Worker {
             .cloned()
             .collect();
         let emojis = self.sticker_emojis(&listed);
+        let audio = self.sticker_audio_map(&listed);
         self.emit(Event::Stickers {
             favorites,
             packs,
             recent,
             received,
             emojis,
+            audio,
         });
+    }
+
+    /// Maps listed picker sticker paths to their audio preview source, checking
+    /// saved sidecars first and then archived audio-sticker messages.
+    pub(super) fn sticker_audio_map(
+        &self,
+        paths: &[PathBuf],
+    ) -> HashMap<PathBuf, crate::model::StickerAudio> {
+        use crate::model::StickerAudio;
+
+        if paths.is_empty() {
+            return HashMap::new();
+        }
+        let archived = self.archive.audio_stickers().unwrap_or_default();
+        let mut by_path: HashMap<PathBuf, StickerAudio> = HashMap::new();
+        let mut by_hash: HashMap<String, StickerAudio> = HashMap::new();
+        let prefer = |slot: &mut Option<StickerAudio>, next: StickerAudio| match (&*slot, &next) {
+            (None, _) | (Some(StickerAudio::Downloadable { .. }), StickerAudio::Ready(_)) => {
+                *slot = Some(next);
+            }
+            _ => {}
+        };
+        for row in archived {
+            let entry = match row.audio_path.filter(|path| path.exists()) {
+                Some(audio_path) => StickerAudio::Ready(audio_path),
+                None => StickerAudio::Downloadable {
+                    chat: row.chat,
+                    message: row.id,
+                },
+            };
+            if let Some(sticker_path) = row.sticker_path {
+                if let Ok(bytes) = std::fs::read(&sticker_path) {
+                    let hash = super::super::sticker_store::content_hash(&bytes);
+                    let mut slot = by_hash.get(&hash).cloned();
+                    prefer(&mut slot, entry.clone());
+                    if let Some(chosen) = slot {
+                        by_hash.insert(hash, chosen);
+                    }
+                }
+                let mut slot = by_path.get(&sticker_path).cloned();
+                prefer(&mut slot, entry);
+                if let Some(chosen) = slot {
+                    by_path.insert(sticker_path, chosen);
+                }
+            }
+        }
+
+        let mut found = HashMap::new();
+        for path in paths {
+            if let Some(sidecar) = super::super::sticker_store::audio_sidecar(path) {
+                found.insert(path.clone(), StickerAudio::Ready(sidecar));
+                continue;
+            }
+            if let Some(entry) = by_path.get(path) {
+                found.insert(path.clone(), entry.clone());
+                continue;
+            }
+            let hash = self
+                .recent_hashes
+                .get(path)
+                .cloned()
+                .or_else(|| {
+                    let stem = path.file_stem()?.to_str()?;
+                    (stem.len() == 64 && stem.bytes().all(|b| b.is_ascii_hexdigit()))
+                        .then(|| stem.to_owned())
+                })
+                .or_else(|| {
+                    std::fs::read(path)
+                        .ok()
+                        .map(|bytes| super::super::sticker_store::content_hash(&bytes))
+                });
+            if let Some(hash) = hash
+                && let Some(entry) = by_hash.get(&hash)
+            {
+                found.insert(path.clone(), entry.clone());
+            }
+        }
+        found
     }
 
     /// The emojis each sticker file is tagged with, read from its metadata
@@ -461,13 +541,20 @@ impl Worker {
 
     /// Makes a sticker a favorite here and on the phone.
     pub(super) fn favorite_sticker(&mut self, path: &Path) {
-        let hash = match super::super::sticker_store::save(&self.dirs.saved_sticker_dir(), path) {
+        let dir = self.dirs.saved_sticker_dir();
+        let hash = match super::super::sticker_store::save(&dir, path) {
             Ok(hash) => hash,
             Err(error) => {
                 self.emit(Event::Error(format!("Could not add to favorites: {error}")));
                 return;
             }
         };
+        if let Some(crate::model::StickerAudio::Ready(audio_path)) = self
+            .sticker_audio_map(std::slice::from_ref(&path.to_path_buf()))
+            .remove(path)
+        {
+            super::super::sticker_store::save_audio_sidecar(&dir, &hash, &audio_path);
+        }
         self.favorite_changed_here(hash, true);
     }
 
@@ -483,6 +570,7 @@ impl Worker {
         if std::fs::remove_file(path).is_err() {
             return;
         }
+        super::super::sticker_store::remove_audio_sidecars(path);
         match hash {
             Some(hash) => self.favorite_changed_here(hash, false),
             None => self.emit_stickers(),

@@ -184,6 +184,52 @@ pub fn saved(dir: &Path) -> Vec<PathBuf> {
     saved.into_iter().map(|(_, path)| path).collect()
 }
 
+/// Recognized audio extensions stored alongside a saved sticker.
+const AUDIO_EXTENSIONS: &[&str] = &["ogg", "opus", "mp3", "m4a", "aac", "wav", "mp4"];
+
+/// Returns the saved audio sidecar path `{stem}.audio.<ext>` next to `path`, if any exists.
+pub fn audio_sidecar(path: &Path) -> Option<PathBuf> {
+    let dir = path.parent()?;
+    let stem = path.file_stem()?.to_string_lossy();
+    AUDIO_EXTENSIONS
+        .iter()
+        .map(|ext| dir.join(format!("{stem}.audio.{ext}")))
+        .find(|candidate| candidate.exists())
+}
+
+/// Removes any `{stem}.audio.*` sidecar files next to `path`.
+pub fn remove_audio_sidecars(path: &Path) {
+    let (Some(dir), Some(stem)) = (path.parent(), path.file_stem()) else {
+        return;
+    };
+    let stem = stem.to_string_lossy();
+    for ext in AUDIO_EXTENSIONS {
+        let candidate = dir.join(format!("{stem}.audio.{ext}"));
+        if candidate.exists() {
+            let _ = std::fs::remove_file(candidate);
+        }
+    }
+}
+
+/// Copies a sticker's downloaded `source` audio alongside its saved `{hash}.webp`.
+pub fn save_audio_sidecar(dir: &Path, hash: &str, source: &Path) -> Option<PathBuf> {
+    if !source.exists() {
+        return None;
+    }
+    let ext = source
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_ascii_lowercase())
+        .filter(|ext| AUDIO_EXTENSIONS.contains(&ext.as_str()))
+        .unwrap_or_else(|| "ogg".to_owned());
+    let _ = std::fs::create_dir_all(dir);
+    let placeholder = dir.join(format!("{hash}.webp"));
+    remove_audio_sidecars(&placeholder);
+    let target = dir.join(format!("{hash}.audio.{ext}"));
+    std::fs::copy(source, &target).ok()?;
+    Some(target)
+}
+
 /// Saves a sticker under its content hash to deduplicate copies, and
 /// returns that hash.
 pub fn save(dir: &Path, path: &Path) -> Result<String, String> {
@@ -289,5 +335,24 @@ mod tests {
         save(&saved_dir, &source).expect("saves");
         save(&saved_dir, &source).expect("saves");
         assert_eq!(saved(&saved_dir).len(), 1);
+    }
+
+    #[test]
+    fn audio_sidecars_follow_saved_stickers() {
+        let root = tempfile::tempdir().expect("temp");
+        let saved_dir = root.path().join("saved");
+        let source = sticker(&root.path().join("cache"), "a.webp", b"audio-webp");
+        let hash = save(&saved_dir, &source).expect("saves");
+        let saved_webp = saved_dir.join(format!("{hash}.webp"));
+        assert_eq!(audio_sidecar(&saved_webp), None);
+
+        let src_audio = sticker(&root.path().join("cache"), "a.ogg", b"OggS-audio");
+        let sidecar = save_audio_sidecar(&saved_dir, &hash, &src_audio).expect("sidecar");
+        assert_eq!(audio_sidecar(&saved_webp), Some(sidecar.clone()));
+        assert_eq!(std::fs::read(&sidecar).unwrap(), b"OggS-audio");
+
+        remove_audio_sidecars(&saved_webp);
+        assert_eq!(audio_sidecar(&saved_webp), None);
+        assert!(!sidecar.exists());
     }
 }

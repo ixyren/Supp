@@ -579,6 +579,105 @@ fn sections(app: &App) -> Vec<Section> {
         );
         let (title, description) = sound_text(locale, true);
         notifications.row(title, description, |ui, app| sound_control(ui, app, true));
+        if cfg!(target_os = "windows") {
+            notifications.row(
+                translated(locale, "Popup position"),
+                translated(locale, "Corner of the screen where notifications appear."),
+                |ui, app| {
+                    let selected = app.settings.notification_position;
+                    if let Some(corner) = popup_combo(
+                        ui,
+                        app.palette,
+                        app.locale,
+                        "notification_position",
+                        selected,
+                        &crate::settings::NotificationCorner::ALL,
+                        |c, l| c.label(l),
+                    ) {
+                        app.settings.notification_position = corner;
+                        app.actions.push(Action::SettingsChanged);
+                    }
+                },
+            );
+            notifications.row(
+                translated(locale, "Popup size"),
+                translated(locale, "Dimensions of the notification card."),
+                |ui, app| {
+                    let selected = app.settings.notification_size;
+                    if let Some(size) = popup_combo(
+                        ui,
+                        app.palette,
+                        app.locale,
+                        "notification_size",
+                        selected,
+                        &crate::settings::NotificationSize::ALL,
+                        |s, l| s.label(l),
+                    ) {
+                        app.settings.notification_size = size;
+                        app.actions.push(Action::SettingsChanged);
+                    }
+                },
+            );
+            notifications.row(
+                translated(locale, "Entry animation"),
+                translated(locale, "Visual effect when a notification appears."),
+                |ui, app| {
+                    let selected = app.settings.notification_effect;
+                    if let Some(effect) = popup_combo(
+                        ui,
+                        app.palette,
+                        app.locale,
+                        "notification_effect",
+                        selected,
+                        &crate::settings::NotificationEffect::ALL,
+                        |e, l| e.label(l),
+                    ) {
+                        app.settings.notification_effect = effect;
+                        app.actions.push(Action::SettingsChanged);
+                    }
+                },
+            );
+            notifications.row(
+                translated(locale, "Display duration"),
+                translated(locale, "Seconds before notifications hide automatically."),
+                |ui, app| {
+                    let mut secs = app.settings.notification_duration_secs;
+                    let slider = egui::Slider::new(&mut secs, 2..=30)
+                        .suffix(" s")
+                        .clamping(egui::SliderClamping::Always);
+                    let response = ui.add_sized([190.0_f32.min(ui.available_width()), 24.0], slider);
+                    theme::reveal_focus(&response);
+                    if secs != app.settings.notification_duration_secs {
+                        app.settings.notification_duration_secs = secs;
+                        app.actions.push(Action::SettingsChanged);
+                    }
+                },
+            );
+            notifications.toggle(
+                translated(locale, "Show countdown bar"),
+                translated(
+                    locale,
+                    "Displays a progress bar indicating remaining time before hiding.",
+                ),
+                |settings| &mut settings.notification_progress_bar,
+            );
+            notifications.row(
+                translated(locale, "Popup opacity"),
+                translated(locale, "Transparency level of desktop notification cards."),
+                |ui, app| {
+                    let mut opacity = app.settings.notification_opacity;
+                    let slider = egui::Slider::new(&mut opacity, 70..=100)
+                        .suffix("%")
+                        .clamping(egui::SliderClamping::Always);
+                    let response = ui.add_sized([190.0_f32.min(ui.available_width()), 24.0], slider);
+                    theme::reveal_focus(&response);
+                    if opacity != app.settings.notification_opacity {
+                        app.settings.notification_opacity = opacity;
+                        app.actions.push(Action::SettingsChanged);
+                    }
+                },
+            );
+        }
         notifications.row(
             translated(locale, "Test notification"),
             translated(
@@ -2176,6 +2275,31 @@ fn privacy_control(ui: &mut egui::Ui, app: &mut App, kind: PrivacyKind) {
             });
         });
     });
+}
+
+/// Shared ComboBox selector for discrete popup notification options.
+fn popup_combo<T: Copy + PartialEq>(
+    ui: &mut egui::Ui,
+    palette: Palette,
+    locale: Locale,
+    id_salt: &str,
+    selected: T,
+    choices: &[T],
+    label: impl Fn(T, Locale) -> Cow<'static, str>,
+) -> Option<T> {
+    let mut picked = None;
+    let response = egui::ComboBox::from_id_salt(id_salt)
+        .selected_text(label(selected, locale))
+        .width(200.0_f32.min(ui.available_width()))
+        .show_ui(ui, |ui| {
+            for &choice in choices {
+                if theme_option(ui, &palette, label(choice, locale).as_ref(), choice == selected) {
+                    picked = Some(choice);
+                }
+            }
+        });
+    theme::reveal_focus(&response.response);
+    picked
 }
 
 /// Theme filenames can contain emoji, so paint them through the shared line renderer.

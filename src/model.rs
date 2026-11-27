@@ -2082,6 +2082,15 @@ pub enum SidebarDisplayMode {
     CollapsedIconsOnly,
 }
 
+/// How audio for a sticker in the picker can be previewed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StickerAudio {
+    /// Local audio file ready to play immediately.
+    Ready(PathBuf),
+    /// Archived WhatsApp message with an audio track waiting to be downloaded.
+    Downloadable { chat: ChatId, message: String },
+}
+
 /// Which list the sticker tab shows.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub enum StickerShelf {
@@ -3120,6 +3129,8 @@ pub enum Action {
     },
     CloseMentions,
     SendSticker(PathBuf),
+    /// Plays or pauses the audio track attached to a picker sticker before sending.
+    PreviewStickerAudio(PathBuf),
     /// Saves a sticker for the picker.
     SaveSticker(PathBuf),
     /// Removes a saved sticker.

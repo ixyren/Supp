@@ -1439,13 +1439,14 @@ pub enum Event {
     /// could not be opened.
     StickerPackPreview(Result<(StickerPack, String), String>),
     /// Favorite stickers, packs, recent stickers, and stickers others sent,
-    /// for the picker, with the emojis each sticker is tagged with.
+    /// for the picker, with the emojis and audio availability each sticker carries.
     Stickers {
         favorites: Vec<PathBuf>,
         packs: Vec<StickerPack>,
         recent: Vec<PathBuf>,
         received: Vec<PathBuf>,
         emojis: std::collections::HashMap<PathBuf, Vec<String>>,
+        audio: std::collections::HashMap<PathBuf, crate::model::StickerAudio>,
     },
     Media {
         card: Option<usize>,

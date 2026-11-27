@@ -179,6 +179,31 @@ const SEARCH_DELAY: Duration = Duration::from_millis(250);
 /// run downloads. A stalled download must not keep music paused for good.
 const VOICE_FETCH_HOLD: Duration = Duration::from_secs(10);
 
+/// Marker attached to viewport screenshot requests taken before an account switch.
+#[derive(Debug)]
+pub(crate) struct AccountSwitchShot;
+
+/// Visual state of the animated transition when switching between accounts.
+#[derive(Default)]
+pub(crate) enum AccountSwitchTransition {
+    #[default]
+    Idle,
+    Capturing {
+        target: AccountId,
+        origin: Option<egui::Pos2>,
+        since: Instant,
+    },
+    Revealing {
+        snapshot: Option<egui::TextureHandle>,
+        started: Instant,
+        origin: Option<egui::Pos2>,
+        account_name: String,
+        account_detail: Option<String>,
+        account_key: String,
+        avatar: Option<PathBuf>,
+    },
+}
+
 /// Loaded chat history and paging state.
 #[derive(Default)]
 pub struct Conversation {
@@ -475,8 +500,10 @@ pub struct App {
     /// Whether palette changes are revealed. Off in tests, whose frames send
     /// no screenshots and would hold the old palette.
     pub reveal_theme_changes: bool,
-    /// When the active account last switched, for the cross-fade transition.
-    pub(crate) account_switch_at: Option<Instant>,
+    /// Animated portal transition when switching between WhatsApp accounts.
+    pub(crate) account_switch: AccountSwitchTransition,
+    /// Last pointer origin where the user initiated an account switch.
+    pub(crate) account_switch_origin: Option<egui::Pos2>,
     zoom_applied: bool,
     /// The wallpaper image named in the settings, decoded off this thread.
     pub wallpaper_image: crate::wallpaper::CustomImage,
@@ -710,6 +737,8 @@ pub struct App {
     pub sticker_search: String,
     /// Emojis each listed sticker is tagged with.
     pub sticker_emojis: std::collections::HashMap<PathBuf, Vec<String>>,
+    /// Picker sticker whose audio is currently downloading before preview playback.
+    pub(crate) sticker_audio_preview_wanted: Option<(ChatId, String, PathBuf)>,
     /// Text in the "New pack" field.
     pub sticker_pack_name: String,
     /// The picture being made into a sticker.
@@ -1592,7 +1621,8 @@ impl App {
             applied_dark: None,
             theme_transition: fastframe_theme::Transition::default(),
             reveal_theme_changes: !cfg!(test),
-            account_switch_at: None,
+            account_switch: AccountSwitchTransition::Idle,
+            account_switch_origin: None,
             zoom_applied: false,
             wallpaper_image: crate::wallpaper::CustomImage::default(),
             scroll_chats_to_top: false,
@@ -1704,6 +1734,7 @@ impl App {
             sticker_shelf: StickerShelf::default(),
             sticker_search: String::new(),
             sticker_emojis: std::collections::HashMap::new(),
+            sticker_audio_preview_wanted: None,
             sticker_pack_name: String::new(),
             sticker_pack_created: None,
             sticker_preview: None,
@@ -1827,7 +1858,7 @@ impl App {
         // A hand-edited speed snaps to a supported one, so a speed control
         // always shows the speed that plays.
         app.settings.voice_speed = app.player.set_speed(app.settings.voice_speed);
-        app.notifications.set_palette(app.palette);
+        app.notifications.sync_config(app.palette, &app.settings);
         // The chip comes back with its account; a label is the window's.
         app.label_filter = app.remembered_label();
         app
@@ -1961,9 +1992,40 @@ impl App {
         self.account_wheeled = Some(now);
         let id = self.accounts[next].id.clone();
         self.switch_account(&id);
+        if !cfg!(test) {
+            let origin = self.account_switch_origin.take();
+            self.reveal_active_account(None, origin);
+        }
     }
 
-    fn switch_account(&mut self, id: &AccountId) {
+    pub(crate) fn reveal_active_account(
+        &mut self,
+        snapshot: Option<egui::TextureHandle>,
+        origin: Option<egui::Pos2>,
+    ) {
+        let locale = self.locale;
+        let active = &mut self.accounts[self.active];
+        let account_name = active.display_label(locale);
+        let account_detail = active.phone();
+        let me = active.me.clone().unwrap_or_default();
+        let account_key = if me.is_empty() {
+            active.id.as_str().to_owned()
+        } else {
+            me.clone()
+        };
+        let avatar = (!me.is_empty()).then(|| active.avatar(&me)).flatten();
+        self.account_switch = AccountSwitchTransition::Revealing {
+            snapshot,
+            started: Instant::now(),
+            origin,
+            account_name,
+            account_detail,
+            account_key,
+            avatar,
+        };
+    }
+
+    pub(crate) fn switch_account(&mut self, id: &AccountId) {
         let Some(index) = self.accounts.iter().position(|account| &account.id == id) else {
             return;
         };
@@ -1977,7 +2039,6 @@ impl App {
         self.clear_account_ui();
         self.active = index;
         self.adding_account = false;
-        self.account_switch_at = (!cfg!(test)).then(Instant::now);
         if let Some(abandoned) = abandoned {
             self.remove_account(abandoned);
         }
@@ -2016,6 +2077,7 @@ impl App {
         }
         self.sticker_shelf = StickerShelf::default();
         self.sticker_emojis.clear();
+        self.stop_sticker_preview();
         self.sticker_pack_created = None;
         self.sticker_view = None;
         self.sticker_preview = None;
@@ -2140,8 +2202,11 @@ impl App {
         self.accounts.push(account);
         self.active = self.accounts.len() - 1;
         self.adding_account = true;
-        self.account_switch_at = (!cfg!(test)).then(Instant::now);
         self.page = Page::Chats;
+        if !cfg!(test) {
+            let origin = self.account_switch_origin.take();
+            self.reveal_active_account(None, origin);
+        }
         self.restore_composer();
         self.save_roster();
         self.report_presence();
@@ -2201,11 +2266,13 @@ impl App {
         }
         if removing_active {
             self.adding_account = false;
-            self.account_switch_at = (!cfg!(test)).then(Instant::now);
             self.restore_composer();
             self.page = Page::Chats;
             self.wallpaper_image.reload();
             self.nav_history.clear();
+            if !cfg!(test) {
+                self.reveal_active_account(None, None);
+            }
         }
         self.save_roster();
         self.report_presence();
@@ -2637,7 +2704,7 @@ impl App {
             .or_else(|| self.cached_avatar(&sender));
         let waker = self.waker.clone();
         let sound = notification_sound(&self.settings, chat_sound, is_group, for_us);
-        self.notifications.set_palette(self.palette);
+        self.notifications.sync_config(self.palette, &self.settings);
         self.notifications.show(
             title,
             body,
@@ -2673,7 +2740,7 @@ impl App {
         let (title, body) = crate::notify::locked_lines(self.locale);
         let sound = notification_sound(&self.settings, None, is_group, false);
         let waker = self.waker.clone();
-        self.notifications.set_palette(self.palette);
+        self.notifications.sync_config(self.palette, &self.settings);
         self.notifications.show(
             title,
             body,
@@ -2790,7 +2857,8 @@ impl App {
             .ok();
         self.applied_dark = None;
         self.theme_transition = fastframe_theme::Transition::default();
-        self.account_switch_at = None;
+        self.account_switch = AccountSwitchTransition::Idle;
+        self.account_switch_origin = None;
         self.zoom_applied = false;
         self.window_hidden = false;
         self.paste_keys = PasteKeys::default();
@@ -4409,11 +4477,13 @@ impl App {
                 recent,
                 received,
                 emojis,
+                audio,
             } => {
                 self.stickers_saved = favorites;
                 self.sticker_packs = packs;
                 self.stickers = recent;
                 self.stickers_received = received;
+                self.sticker_audio = audio;
                 self.stickers_pending = false;
                 self.sticker_import_pending = false;
                 // The picker belongs to the account on screen.
@@ -4588,6 +4658,14 @@ impl App {
                 message,
                 result,
             } => {
+                let preview_target = self
+                    .sticker_audio_preview_wanted
+                    .as_ref()
+                    .is_some_and(|(wanted_chat, wanted, _)| {
+                        wanted_chat == &chat && wanted == &message
+                    })
+                    .then(|| self.sticker_audio_preview_wanted.take())
+                    .flatten();
                 let want_voice = !self.events_hidden
                     && self
                         .voice_wanted
@@ -4597,23 +4675,38 @@ impl App {
                         });
                 let open = self.open_chat.as_deref() == Some(chat.as_str());
                 if let Some(audio) = self.sticker_audio_mut(&chat, &message) {
-                    match result {
+                    match &result {
                         Ok(path) => {
                             audio.path = Some(path.clone());
                             audio.state = MediaState::Idle;
                             if want_voice {
                                 self.voice_wanted = None;
                                 if open {
-                                    self.play_sticker_audio(message, path);
+                                    self.play_sticker_audio(message.clone(), path.clone());
                                 }
                             }
                         }
                         Err(error) => {
-                            audio.state = MediaState::Failed(error);
+                            audio.state = MediaState::Failed(error.clone());
                             if want_voice {
                                 self.voice_wanted = None;
                             }
                         }
+                    }
+                }
+                if let Some((_, _, sticker_path)) = preview_target {
+                    match result {
+                        Ok(path) => {
+                            self.sticker_audio
+                                .insert(sticker_path.clone(), crate::model::StickerAudio::Ready(path.clone()));
+                            if live && self.picker == Some(PickerTab::Stickers) {
+                                self.play_sticker_audio(
+                                    Self::sticker_preview_audio_key(&sticker_path),
+                                    path,
+                                );
+                            }
+                        }
+                        Err(error) => self.toast_error(error),
                     }
                 }
             }
@@ -4975,7 +5068,10 @@ impl App {
                     published_at: None,
                 };
                 if self.update.as_ref() != Some(&notice) {
-                    self.toast(format!("Supp {} is available", notice.version));
+                    self.toast(
+                        crate::i18n::gettext(self.locale, "Supp {version} is available")
+                            .replace("{version}", &notice.version),
+                    );
                 }
                 self.update = Some(notice);
             }
@@ -7380,7 +7476,7 @@ impl App {
         ctx.set_theme(preference);
         if self.applied_dark.is_none() || self.palette != palette {
             self.palette = palette;
-            self.notifications.set_palette(self.palette);
+            self.notifications.sync_config(self.palette, &self.settings);
             crate::theme::apply(ctx, &self.palette);
             self.applied_dark = Some(dark);
         }
@@ -8827,8 +8923,12 @@ impl App {
                 self.reaction_anchor = None;
                 if self.picker == Some(tab) {
                     self.picker = None;
+                    self.stop_sticker_preview();
                     self.refocus_composer(ctx);
                 } else {
+                    if self.picker == Some(PickerTab::Stickers) && tab != PickerTab::Stickers {
+                        self.stop_sticker_preview();
+                    }
                     self.picker = Some(tab);
                     self.picker_search.clear();
                     self.picker_focus = tab == PickerTab::Emoji;
@@ -8860,6 +8960,7 @@ impl App {
                     );
                 }
                 self.picker = None;
+                self.stop_sticker_preview();
                 self.reaction_target = None;
                 self.reaction_anchor = None;
                 self.emoji_jump = None;
@@ -9065,6 +9166,7 @@ impl App {
                 });
             }
             Action::SendSticker(path) => {
+                self.stop_sticker_preview();
                 if let Some(chat) = self.open_chat.clone() {
                     let quoting = self.reply_to.take();
                     self.backend.send(Command::SendSticker {
@@ -9074,6 +9176,35 @@ impl App {
                     });
                     self.follow_outgoing();
                     self.refocus_composer(ctx);
+                }
+            }
+            Action::PreviewStickerAudio(path) => {
+                let key = Self::sticker_preview_audio_key(&path);
+                if matches!(
+                    self.player.status(&key).state,
+                    crate::audio::State::Playing | crate::audio::State::Loading
+                ) {
+                    self.player.stop();
+                    self.sticker_audio_preview_wanted = None;
+                    return;
+                }
+                match self.sticker_audio.get(&path).cloned() {
+                    Some(crate::model::StickerAudio::Ready(audio_path)) => {
+                        self.sticker_audio_preview_wanted = None;
+                        self.play_sticker_audio(key, audio_path);
+                    }
+                    Some(crate::model::StickerAudio::Downloadable { chat, message }) => {
+                        self.player.stop();
+                        self.video.stop();
+                        self.voice_wanted = None;
+                        self.voice_chat = None;
+                        self.voice_clip_chat = None;
+                        self.sticker_audio_preview_wanted =
+                            Some((chat.clone(), message.clone(), path));
+                        self.backend
+                            .send(Command::DownloadStickerAudio { chat, message });
+                    }
+                    None => {}
                 }
             }
             Action::FormatComposer { format, start, end } => {
@@ -9876,7 +10007,10 @@ impl App {
                 self.search_hits.clear();
                 self.mark_settings_dirty();
             }
-            Action::SettingsChanged => self.mark_settings_dirty(),
+            Action::SettingsChanged => {
+                self.notifications.sync_config(self.palette, &self.settings);
+                self.mark_settings_dirty();
+            }
             Action::SetAccountPrivacy { kind, choice } => {
                 // The value lives on the phone: nothing is written without a
                 // connection and a snapshot to write against.
@@ -9902,7 +10036,7 @@ impl App {
             }
             Action::PreviewSound(sound) => crate::notify::play_sound(sound),
             Action::TestNotification => {
-                self.notifications.set_palette(self.palette);
+                self.notifications.sync_config(self.palette, &self.settings);
                 let waker = self.waker.clone();
                 self.notifications.show(
                     "Supp".to_owned(),
@@ -10241,7 +10375,25 @@ impl App {
             }
             // Route through the configured window-close behavior.
             Action::CloseWindow => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
-            Action::SwitchAccount(id) => self.switch_account(&id),
+            Action::SwitchAccount(id) => {
+                if cfg!(test)
+                    || crate::motion::screen_reader_attached(ctx)
+                    || self.accounts[self.active].id == id
+                {
+                    self.switch_account(&id);
+                } else if self.accounts.iter().any(|account| account.id == id) {
+                    let origin = self.account_switch_origin.take();
+                    self.account_switch = AccountSwitchTransition::Capturing {
+                        target: id,
+                        origin,
+                        since: Instant::now(),
+                    };
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(
+                        egui::UserData::new(AccountSwitchShot),
+                    ));
+                    ctx.request_repaint();
+                }
+            }
             Action::CycleAccount(step) => self.cycle_account(step, Instant::now()),
             Action::AddAccount => self.add_account(),
             Action::CancelAddAccount => {
@@ -10256,6 +10408,10 @@ impl App {
                     })
                 {
                     self.switch_account(&back);
+                    if !cfg!(test) {
+                        let origin = self.account_switch_origin.take();
+                        self.reveal_active_account(None, origin);
+                    }
                 }
             }
             Action::RemoveAccount(id) => self.remove_account(id),
@@ -11141,6 +11297,22 @@ impl App {
             return;
         }
         self.tell_played(message);
+    }
+
+    /// Player key used for audio preview playback inside the sticker picker.
+    pub(crate) fn sticker_preview_audio_key(path: &std::path::Path) -> String {
+        format!("picker-sticker:{}", path.display())
+    }
+
+    fn stop_sticker_preview(&mut self) {
+        self.sticker_audio_preview_wanted = None;
+        if self
+            .player
+            .current()
+            .is_some_and(|key| key.starts_with("picker-sticker:"))
+        {
+            self.player.stop();
+        }
     }
 
     /// Plays a sticker's embedded audio once at 1x speed, muting any other
@@ -16248,6 +16420,7 @@ mod tests {
             recent: Vec::new(),
             received: Vec::new(),
             emojis: std::collections::HashMap::new(),
+            audio: std::collections::HashMap::new(),
         }
     }
 

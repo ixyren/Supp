@@ -429,6 +429,90 @@ impl NotificationLimit {
     }
 }
 
+/// Screen corner where desktop popup notifications appear on Windows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NotificationCorner {
+    #[default]
+    BottomRight,
+    BottomLeft,
+    TopRight,
+    TopLeft,
+}
+
+impl NotificationCorner {
+    pub const ALL: [Self; 4] = [
+        Self::BottomRight,
+        Self::BottomLeft,
+        Self::TopRight,
+        Self::TopLeft,
+    ];
+
+    pub fn label(self, locale: crate::i18n::Locale) -> std::borrow::Cow<'static, str> {
+        match self {
+            Self::BottomRight => crate::i18n::gettext(locale, "Bottom right"),
+            Self::BottomLeft => crate::i18n::gettext(locale, "Bottom left"),
+            Self::TopRight => crate::i18n::gettext(locale, "Top right"),
+            Self::TopLeft => crate::i18n::gettext(locale, "Top left"),
+        }
+    }
+}
+
+/// Dimensions of floating desktop popup notifications on Windows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NotificationSize {
+    Compact,
+    #[default]
+    Normal,
+    Large,
+}
+
+impl NotificationSize {
+    pub const ALL: [Self; 3] = [Self::Compact, Self::Normal, Self::Large];
+
+    /// Logical card size `(width, height)` in DIPs (compact square-proportioned card).
+    pub fn dimensions(self) -> (f32, f32) {
+        match self {
+            Self::Compact => (244.0, 208.0),
+            Self::Normal => (272.0, 232.0),
+            Self::Large => (310.0, 264.0),
+        }
+    }
+
+    pub fn label(self, locale: crate::i18n::Locale) -> std::borrow::Cow<'static, str> {
+        match self {
+            Self::Compact => crate::i18n::gettext(locale, "Compact"),
+            Self::Normal => crate::i18n::gettext(locale, "Normal"),
+            Self::Large => crate::i18n::gettext(locale, "Large"),
+        }
+    }
+}
+
+/// Visual entry animation effect for floating desktop popup notifications on Windows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum NotificationEffect {
+    #[default]
+    Spring,
+    Bloom,
+    Glide,
+    Fade,
+}
+
+impl NotificationEffect {
+    pub const ALL: [Self; 4] = [Self::Spring, Self::Bloom, Self::Glide, Self::Fade];
+
+    pub fn label(self, locale: crate::i18n::Locale) -> std::borrow::Cow<'static, str> {
+        match self {
+            Self::Spring => crate::i18n::gettext(locale, "Elastic spring"),
+            Self::Bloom => crate::i18n::gettext(locale, "Radial bloom"),
+            Self::Glide => crate::i18n::gettext(locale, "Smooth glide"),
+            Self::Fade => crate::i18n::gettext(locale, "Soft fade"),
+        }
+    }
+}
+
 /// The sound a new-message notification makes.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -546,6 +630,18 @@ pub struct Settings {
     /// Play the message sound for ordinary group messages. Mentions and
     /// replies to us sound either way.
     pub group_sounds: bool,
+    /// Seconds before a desktop popup notification hides automatically (`2..=30`).
+    pub notification_duration_secs: u32,
+    /// Screen corner where floating popup notifications appear.
+    pub notification_position: NotificationCorner,
+    /// Size preset for floating popup notifications.
+    pub notification_size: NotificationSize,
+    /// Show the remaining-time progress bar at the bottom of popup notifications.
+    pub notification_progress_bar: bool,
+    /// Opacity percentage (`70..=100`) of floating popup notifications.
+    pub notification_opacity: u8,
+    /// Visual entry animation effect for floating popup notifications.
+    pub notification_effect: NotificationEffect,
     /// Folder for new downloads. `None` keeps them in the cache. Files
     /// already downloaded stay where they are when this changes.
     pub download_folder: Option<std::path::PathBuf>,
@@ -639,6 +735,12 @@ impl Default for Settings {
             message_sound: NotificationSound::Receive,
             mention_sound: NotificationSound::Alert,
             group_sounds: true,
+            notification_duration_secs: 6,
+            notification_position: NotificationCorner::BottomRight,
+            notification_size: NotificationSize::Normal,
+            notification_progress_bar: true,
+            notification_opacity: 96,
+            notification_effect: NotificationEffect::default(),
             download_folder: None,
             keep_chats_archived: true,
             proxy: String::new(),
@@ -808,6 +910,8 @@ impl Settings {
                 self.dark_wallpaper_color = WallpaperColor::Theme;
             }
         }
+        self.notification_duration_secs = self.notification_duration_secs.clamp(2, 30);
+        self.notification_opacity = self.notification_opacity.clamp(70, 100);
         self.version = self.version.max(SETTINGS_VERSION);
     }
 
@@ -1566,5 +1670,48 @@ mod giphy_tests {
             assert_eq!(limit.applies(false), direct, "{limit:?} for direct chats");
             assert_eq!(limit.applies(true), group, "{limit:?} for groups");
         }
+    }
+
+    #[test]
+    fn notification_popup_settings_round_trip_and_clamp() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let saved = Settings {
+            notification_duration_secs: 15,
+            notification_position: NotificationCorner::TopLeft,
+            notification_size: NotificationSize::Large,
+            notification_progress_bar: false,
+            notification_opacity: 82,
+            notification_effect: NotificationEffect::Bloom,
+            ..Settings::default()
+        };
+        saved.save(&path).unwrap();
+        let loaded = Settings::load(&path);
+        assert_eq!(loaded.notification_duration_secs, 15);
+        assert_eq!(loaded.notification_position, NotificationCorner::TopLeft);
+        assert_eq!(loaded.notification_size, NotificationSize::Large);
+        assert!(!loaded.notification_progress_bar);
+        assert_eq!(loaded.notification_opacity, 82);
+        assert_eq!(loaded.notification_effect, NotificationEffect::Bloom);
+
+        // Out-of-range duration and opacity clamp on load.
+        let clamped_path = dir.path().join("clamped.json");
+        std::fs::write(
+            &clamped_path,
+            r#"{"notification_duration_secs":0,"notification_opacity":12}"#,
+        )
+        .unwrap();
+        let clamped = Settings::load(&clamped_path);
+        assert_eq!(clamped.notification_duration_secs, 2);
+        assert_eq!(clamped.notification_opacity, 70);
+
+        std::fs::write(
+            &clamped_path,
+            r#"{"notification_duration_secs":999,"notification_opacity":250}"#,
+        )
+        .unwrap();
+        let high = Settings::load(&clamped_path);
+        assert_eq!(high.notification_duration_secs, 30);
+        assert_eq!(high.notification_opacity, 100);
     }
 }

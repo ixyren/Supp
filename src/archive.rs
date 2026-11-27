@@ -62,6 +62,15 @@ pub struct ArchivedSticker {
     pub raw: Option<Vec<u8>>,
 }
 
+/// Archived sticker message carrying a separate audio track.
+#[derive(Clone, Debug)]
+pub struct ArchivedAudioSticker {
+    pub chat: String,
+    pub id: String,
+    pub sticker_path: Option<std::path::PathBuf>,
+    pub audio_path: Option<std::path::PathBuf>,
+}
+
 pub struct Archive {
     connection: Connection,
 }
@@ -1975,6 +1984,32 @@ impl Archive {
             .flatten()
             .filter(|sticker| sticker.path.exists())
             .collect())
+    }
+
+    /// Returns sticker messages that carry an audio track, newest first.
+    pub fn audio_stickers(&self) -> Result<Vec<ArchivedAudioSticker>> {
+        let mut statement = self.connection.prepare(
+            "SELECT chat, id,
+                    json_extract(content, '$.media.path'),
+                    json_extract(content, '$.audio.path')
+             FROM messages
+             WHERE json_extract(content, '$.kind') = 'sticker'
+               AND json_extract(content, '$.audio') IS NOT NULL
+             ORDER BY timestamp DESC",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok(ArchivedAudioSticker {
+                chat: row.get(0)?,
+                id: row.get(1)?,
+                sticker_path: row
+                    .get::<_, Option<String>>(2)?
+                    .map(std::path::PathBuf::from),
+                audio_path: row
+                    .get::<_, Option<String>>(3)?
+                    .map(std::path::PathBuf::from),
+            })
+        })?;
+        Ok(rows.flatten().collect())
     }
 
     /// Returns undownloaded stickers we sent, newest first, for Recent.

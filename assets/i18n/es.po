@@ -4530,3 +4530,75 @@ msgstr "{name} está escribiendo…"
 msgid "{names} and {last} are typing…"
 msgstr "{names} y {last} están escribiendo…"
 
+msgid "Active account"
+msgstr "Cuenta activa"
+
+msgid "Bottom left"
+msgstr "Abajo a la izquierda"
+
+msgid "Bottom right"
+msgstr "Abajo a la derecha"
+
+msgid "Compact"
+msgstr "Compacto"
+
+msgid "Corner of the screen where notifications appear."
+msgstr "Esquina de la pantalla donde aparecen las notificaciones."
+
+msgid "Dimensions of the notification card."
+msgstr "Dimensiones de la tarjeta de notificación."
+
+msgid "Display duration"
+msgstr "Duración en pantalla"
+
+msgid "Displays a progress bar indicating remaining time before hiding."
+msgstr "Muestra una barra de tiempo con el tiempo restante antes de ocultarse."
+
+msgid "Elastic spring"
+msgstr "Rebote elástico"
+
+msgid "Entry animation"
+msgstr "Animación de entrada"
+
+msgid "Large"
+msgstr "Grande"
+
+msgid "Normal"
+msgstr "Normal"
+
+msgid "Popup opacity"
+msgstr "Opacidad de la notificación"
+
+msgid "Popup position"
+msgstr "Posición de notificaciones"
+
+msgid "Popup size"
+msgstr "Tamaño de notificaciones"
+
+msgid "Radial bloom"
+msgstr "Destello radial"
+
+msgid "Seconds before notifications hide automatically."
+msgstr "Segundos antes de que las notificaciones se oculten automáticamente."
+
+msgid "Show countdown bar"
+msgstr "Mostrar barra de tiempo"
+
+msgid "Smooth glide"
+msgstr "Deslizamiento suave"
+
+msgid "Soft fade"
+msgstr "Desvanecimiento suave"
+
+msgid "Top left"
+msgstr "Arriba a la izquierda"
+
+msgid "Top right"
+msgstr "Arriba a la derecha"
+
+msgid "Transparency level of desktop notification cards."
+msgstr "Nivel de transparencia de las tarjetas de notificación en el escritorio."
+
+msgid "Visual effect when a notification appears."
+msgstr "Efecto visual al aparecer una notificación."
+

@@ -12,7 +12,7 @@ use egui::{
 use crate::app::App;
 use crate::emoji;
 use crate::i18n::gettext;
-use crate::model::{Action, Dialog, PickerTab, StickerPack, StickerShelf};
+use crate::model::{Action, Dialog, PickerTab, StickerAudio, StickerPack, StickerShelf};
 use crate::theme::{self, Icon, Palette};
 
 use super::conversation;
@@ -1198,6 +1198,7 @@ const SHELF_TAB: f32 = 34.0;
 #[derive(Default)]
 struct StickerChoices {
     send: Option<PathBuf>,
+    preview_audio: Option<PathBuf>,
     save: Option<PathBuf>,
     forget: Option<PathBuf>,
     /// Taking a sticker out of Recent.
@@ -1344,10 +1345,17 @@ fn sticker_tab(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
         .filter(|pack| pack.local)
         .cloned()
         .collect();
+    let downloading_audio = app
+        .sticker_audio_preview_wanted
+        .as_ref()
+        .map(|(_, _, path)| path.as_path());
     let grid = GridContext {
         locale,
         animate: app.window_focused,
         local: &local,
+        audio: &app.sticker_audio,
+        player: &app.player,
+        downloading: downloading_audio,
     };
     let mut choices = StickerChoices::default();
     let mut delete_pack = None;
@@ -1478,6 +1486,9 @@ fn sticker_tab(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
     }
     if let Some(path) = choices.send {
         app.actions.push(Action::SendSticker(path));
+    }
+    if let Some(path) = choices.preview_audio {
+        app.actions.push(Action::PreviewStickerAudio(path));
     }
     if let Some(path) = choices.save {
         app.actions.push(Action::SaveSticker(path));
@@ -1709,10 +1720,107 @@ struct GridContext<'a> {
     animate: bool,
     /// Local packs a sticker can be filed into.
     local: &'a [StickerPack],
+    /// Audio track status by sticker file path.
+    audio: &'a HashMap<PathBuf, StickerAudio>,
+    /// Shared audio player state for play/mute indicator.
+    player: &'a crate::audio::Player,
+    /// Sticker whose audio is currently downloading for preview playback.
+    downloading: Option<&'a Path>,
 }
 
-/// Sticker tiles. Click sends; right-click saves, removes, or files the tile
-/// into one of the local packs.
+fn sticker_audio_badge_rect(tile: Rect) -> Rect {
+    Rect::from_min_size(pos2(tile.right() - 25.0, tile.bottom() - 25.0), Vec2::splat(22.0))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn paint_sticker_audio_badge(
+    ui: &egui::Ui,
+    palette: &Palette,
+    rect: Rect,
+    playing: bool,
+    downloading: bool,
+    hovered: bool,
+) {
+    let center = rect.center();
+    let radius = rect.width() * 0.5;
+    if playing {
+        let time = ui.input(|input| input.time) as f32;
+        let pulse = 0.5 + 0.5 * (time * 6.5).sin();
+        ui.painter().circle_stroke(
+            center,
+            radius + 1.5 + pulse * 2.5,
+            Stroke::new(1.5, palette.accent.gamma_multiply(0.45 + 0.35 * pulse)),
+        );
+        ui.painter().circle_filled(
+            center,
+            radius,
+            if hovered { palette.accent_hover } else { palette.accent },
+        );
+        theme::paint_icon(ui, Icon::VolumeX, rect.shrink(4.0), 12.0, palette.on_accent);
+        crate::motion::request_frame(ui.ctx());
+    } else if downloading {
+        ui.painter().circle_filled(
+            center,
+            radius,
+            egui::Color32::from_rgba_unmultiplied(18, 22, 26, 215),
+        );
+        ui.painter().circle_stroke(
+            center,
+            radius - 0.5,
+            Stroke::new(1.0, palette.accent.gamma_multiply(0.85)),
+        );
+        let time = ui.input(|input| input.time) as f32;
+        let angle = time * 4.5;
+        let r = radius - 4.5;
+        let arc_points: Vec<egui::Pos2> = (0..=16)
+            .map(|step| {
+                let a = angle + (step as f32 / 16.0) * std::f32::consts::PI * 1.35;
+                pos2(center.x + a.cos() * r, center.y + a.sin() * r)
+            })
+            .collect();
+        ui.painter().add(egui::Shape::line(
+            arc_points,
+            Stroke::new(1.8, palette.accent),
+        ));
+        crate::motion::request_frame(ui.ctx());
+    } else {
+        ui.painter().circle_filled(
+            center,
+            radius,
+            if hovered {
+                palette.accent
+            } else {
+                egui::Color32::from_rgba_unmultiplied(18, 22, 26, 205)
+            },
+        );
+        ui.painter().circle_stroke(
+            center,
+            radius - 0.5,
+            Stroke::new(
+                if hovered { 1.4 } else { 1.1 },
+                if hovered {
+                    egui::Color32::WHITE.gamma_multiply(0.85)
+                } else {
+                    palette.accent.gamma_multiply(0.90)
+                },
+            ),
+        );
+        theme::paint_icon(
+            ui,
+            Icon::Volume2,
+            rect.shrink(4.0),
+            12.0,
+            if hovered {
+                palette.on_accent
+            } else {
+                egui::Color32::WHITE
+            },
+        );
+    }
+}
+
+/// Sticker tiles. Click sends; audio badge previews sound; right-click saves,
+/// removes, or files the tile into one of the local packs.
 fn sticker_grid(
     ui: &mut egui::Ui,
     palette: &Palette,
@@ -1725,6 +1833,9 @@ fn sticker_grid(
     let remove_label = gettext(grid.locale, "Remove from favorites");
     let save_label = gettext(grid.locale, "Add to favorites");
     let unrecent_label = gettext(grid.locale, "Remove from recents");
+    let play_audio_label = gettext(grid.locale, "Play sticker audio");
+    let mute_audio_label = gettext(grid.locale, "Mute sticker audio");
+    let downloading_label = gettext(grid.locale, "Downloading…");
     let columns = 5;
     let gap = 6.0;
     let cell = (ui.available_width() - gap * (columns as f32 - 1.0)) / columns as f32;
@@ -1733,6 +1844,8 @@ fn sticker_grid(
         remove_label.as_ref(),
         save_label.as_ref(),
         unrecent_label.as_ref(),
+        play_audio_label.as_ref(),
+        mute_audio_label.as_ref(),
     ];
     labels.extend(grid.local.iter().map(|pack| pack.name.as_str()));
     let menu_width = widgets::menu_width(ui, &labels, true);
@@ -1744,7 +1857,54 @@ fn sticker_grid(
                     ui.ctx()
                         .data_mut(|data| data.insert_temp(first_tile_id(), rect));
                 }
-                paint_tile(ui, palette, path, rect, response.hovered(), animate);
+                let has_audio = grid.audio.contains_key(path);
+                let audio_key = App::sticker_preview_audio_key(path);
+                let audio_playing = has_audio
+                    && matches!(
+                        grid.player.status(&audio_key).state,
+                        crate::audio::State::Playing | crate::audio::State::Loading
+                    );
+                let audio_downloading =
+                    has_audio && grid.downloading.is_some_and(|wanted| wanted == path.as_path());
+                paint_tile(
+                    ui,
+                    palette,
+                    path,
+                    rect,
+                    response.hovered(),
+                    animate || audio_playing,
+                );
+                let mut badge_clicked = false;
+                if has_audio {
+                    let badge_rect = sticker_audio_badge_rect(rect);
+                    let tip = if audio_downloading {
+                        downloading_label.as_ref()
+                    } else if audio_playing {
+                        mute_audio_label.as_ref()
+                    } else {
+                        play_audio_label.as_ref()
+                    };
+                    let badge = ui
+                        .interact(
+                            badge_rect,
+                            ui.id().with(("sticker-audio-badge", path)),
+                            Sense::click(),
+                        )
+                        .on_hover_cursor(egui::CursorIcon::PointingHand)
+                        .on_hover_text(tip);
+                    paint_sticker_audio_badge(
+                        ui,
+                        palette,
+                        badge_rect,
+                        audio_playing,
+                        audio_downloading,
+                        badge.hovered(),
+                    );
+                    if badge.clicked() {
+                        badge_clicked = true;
+                        choices.preview_audio = Some(path.clone());
+                    }
+                }
                 egui::Popup::context_menu(&response)
                     .width(menu_width)
                     .frame(widgets::menu_frame(palette))
@@ -1753,6 +1913,17 @@ fn sticker_grid(
                         // actions currently assume raw WebP bytes.
                         if path.extension().is_some_and(|extension| extension == "was") {
                             return;
+                        }
+                        if has_audio {
+                            let (icon, label) = if audio_playing {
+                                (Icon::VolumeX, mute_audio_label.as_ref())
+                            } else {
+                                (Icon::Volume2, play_audio_label.as_ref())
+                            };
+                            if widgets::menu_item(ui, palette, Some(icon), label) {
+                                choices.preview_audio = Some(path.clone());
+                            }
+                            widgets::menu_separator(ui, palette);
                         }
                         if shelf == Shelf::Favorites {
                             if widgets::menu_item(ui, palette, Some(Icon::StarOff), &remove_label) {
@@ -1781,9 +1952,10 @@ fn sticker_grid(
                             }
                         }
                     });
-                if response
-                    .on_hover_cursor(egui::CursorIcon::PointingHand)
-                    .clicked()
+                if !badge_clicked
+                    && response
+                        .on_hover_cursor(egui::CursorIcon::PointingHand)
+                        .clicked()
                     && path.extension().is_none_or(|extension| extension != "was")
                 {
                     choices.send = Some(path.clone());
@@ -2202,5 +2374,46 @@ mod pack_tests {
             .expect("a result is drawn");
         frame(&mut app, &ctx, click(tile.center()));
         assert!(app.actions.contains(&Action::SendSticker(sticker)));
+    }
+
+    #[test]
+    fn clicking_audio_badge_on_saved_sticker_previews_audio_instead_of_sending() {
+        let directory = tempfile::tempdir().expect("creates a temporary directory");
+        let (mut app, _events) = App::headless(
+            crate::paths::AppDirs::under(directory.path()),
+            crate::settings::Settings::default(),
+        );
+        let sticker = directory.path().join("sound.webp");
+        let audio = directory.path().join("sound.ogg");
+        std::fs::write(&sticker, b"RIFF0000WEBP").expect("writes");
+        std::fs::write(&audio, b"OggS").expect("writes");
+        app.sticker_shelf = StickerShelf::Favorites;
+        app.stickers_saved = vec![sticker.clone()];
+        app.sticker_audio = [(sticker.clone(), StickerAudio::Ready(audio))].into();
+
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        frame(&mut app, &ctx, Vec::new());
+        let tile = ctx
+            .data(|data| data.get_temp::<egui::Rect>(first_tile_id()))
+            .expect("favorite sticker tile is drawn");
+        let badge = sticker_audio_badge_rect(tile);
+        frame(&mut app, &ctx, click(badge.center()));
+        assert!(
+            app.actions
+                .contains(&Action::PreviewStickerAudio(sticker.clone())),
+            "audio badge click previews sticker audio"
+        );
+        assert!(
+            !app.actions.contains(&Action::SendSticker(sticker.clone())),
+            "audio badge click does not send the sticker"
+        );
+
+        app.actions.clear();
+        frame(&mut app, &ctx, click(tile.center()));
+        assert!(
+            app.actions.contains(&Action::SendSticker(sticker)),
+            "tile click still sends the sticker"
+        );
     }
 }

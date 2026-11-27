@@ -127,6 +127,7 @@ pub fn quick_switch_strip(app: &mut App, ui: &mut egui::Ui) {
                 .on_hover_text(name)
                 .on_hover_cursor(egui::CursorIcon::PointingHand);
             if response.clicked() {
+                app.account_switch_origin = Some(response.rect.center());
                 app.actions.push(Action::SwitchAccount(id));
             }
         });
@@ -224,8 +225,9 @@ fn menu(app: &mut App, button: &egui::Response) {
                         entry.id.clone(),
                         entry.muted,
                     )),
-                    Some(RowClick::Row) => {
+                    Some(RowClick::Row(origin)) => {
                         if !entry.current {
+                            app.account_switch_origin = Some(origin);
                             app.actions.push(Action::SwitchAccount(entry.id.clone()));
                         }
                         ui.close();
@@ -248,8 +250,8 @@ fn menu(app: &mut App, button: &egui::Response) {
 /// What was clicked in an account row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RowClick {
-    /// The row itself, which shows the account.
-    Row,
+    /// The row itself, which shows the account, carrying its avatar center.
+    Row(egui::Pos2),
     /// Its bell, which turns the account's notifications off or on.
     Bell,
 }
@@ -380,10 +382,11 @@ fn account_row(app: &App, ui: &mut egui::Ui, entry: &Entry) -> Option<RowClick> 
     if !entry.current {
         response.on_hover_cursor(egui::CursorIcon::PointingHand);
     }
+    let avatar_center = rect.left_center() + vec2(8.0 + ROW_AVATAR / 2.0, 0.0);
     if bell_clicked {
         Some(RowClick::Bell)
     } else if clicked {
-        Some(RowClick::Row)
+        Some(RowClick::Row(avatar_center))
     } else {
         None
     }

@@ -538,7 +538,7 @@ impl App {
         let waker = self.waker.clone();
         self.call_notified = Some(call.generation);
         self.wants_attention = true;
-        self.notifications.set_palette(self.palette);
+        self.notifications.sync_config(self.palette, &self.settings);
         self.notifications.show(
             title,
             body,
@@ -599,7 +599,7 @@ impl App {
         let group = crate::model::ChatKind::from_id(&update.chat) == crate::model::ChatKind::Group;
         let sound = notification_sound(&self.settings, chat_sound, group, false);
         let waker = self.waker.clone();
-        self.notifications.set_palette(self.palette);
+        self.notifications.sync_config(self.palette, &self.settings);
         self.notifications.show(
             title,
             body,

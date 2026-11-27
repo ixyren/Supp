@@ -92,7 +92,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         accounts::corner(app, ctx);
         dialogs::show(app, ctx);
         overlay::finish(ctx);
-        account_switch_fade(app, ctx);
+        account_switch_transition(app, ctx);
         update::show(app, ctx);
         toasts(app, ctx);
         focus_ring(app, ctx);
@@ -124,7 +124,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     call::show(app, ctx);
     image_editor::show(app, ctx);
     overlay::finish(ctx);
-    account_switch_fade(app, ctx);
+    account_switch_transition(app, ctx);
     drop_target(app, ctx);
     toasts(app, ctx);
     focus_ring(app, ctx);
@@ -681,57 +681,244 @@ pub fn toast_close_id(index: usize) -> egui::Id {
     egui::Id::new(("toast-close", index))
 }
 
-fn account_switch_fade(app: &mut App, ctx: &egui::Context) {
-    const DURATION: std::time::Duration = std::time::Duration::from_millis(240);
-    let Some(started) = app.account_switch_at else {
+fn account_switch_portal_mesh(
+    screen: egui::Rect,
+    texture: egui::TextureId,
+    origin: egui::Pos2,
+    hole: f32,
+    feather: f32,
+    max_radius: f32,
+) -> egui::Mesh {
+    const SEGMENTS: usize = 72;
+    let radii = [hole, hole + feather, max_radius + feather * 2.5];
+    let alphas = [0.0f32, 1.0, 1.0];
+    let size = screen.size().max(egui::Vec2::splat(1.0));
+    let mut mesh = egui::Mesh::with_texture(texture);
+    for (radius, alpha) in radii.into_iter().zip(alphas) {
+        let tint = egui::Color32::WHITE.gamma_multiply(alpha);
+        for segment in 0..SEGMENTS {
+            let angle = segment as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
+            let position = origin + egui::Vec2::angled(angle) * radius;
+            let uv = egui::pos2(
+                (position.x - screen.min.x) / size.x,
+                (position.y - screen.min.y) / size.y,
+            );
+            mesh.vertices.push(egui::epaint::Vertex {
+                pos: position,
+                uv,
+                color: tint,
+            });
+        }
+    }
+    let ring = SEGMENTS as u32;
+    for band in 0..2u32 {
+        for segment in 0..ring {
+            let next = (segment + 1) % ring;
+            let (inner, inner_next) = (band * ring + segment, band * ring + next);
+            let (outer, outer_next) = (inner + ring, inner_next + ring);
+            mesh.add_triangle(inner, outer, outer_next);
+            mesh.add_triangle(inner, outer_next, inner_next);
+        }
+    }
+    mesh
+}
+
+fn account_switch_transition(app: &mut App, ctx: &egui::Context) {
+    use crate::app::{AccountSwitchShot, AccountSwitchTransition};
+    const DURATION_SECS: f32 = 0.48;
+    const CAPTURE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(90);
+    const FEATHER: f32 = 46.0;
+
+    match &app.account_switch {
+        AccountSwitchTransition::Idle => return,
+        AccountSwitchTransition::Capturing { since, .. } => {
+            if crate::motion::screen_reader_attached(ctx) {
+                if let AccountSwitchTransition::Capturing { target, .. } =
+                    std::mem::take(&mut app.account_switch)
+                {
+                    app.switch_account(&target);
+                }
+                return;
+            }
+            let shot = ctx.input(|input| {
+                input.raw.events.iter().find_map(|event| match event {
+                    egui::Event::Screenshot {
+                        user_data, image, ..
+                    } if user_data
+                        .data
+                        .as_ref()
+                        .is_some_and(|data| data.downcast_ref::<AccountSwitchShot>().is_some()) =>
+                    {
+                        Some(std::sync::Arc::clone(image))
+                    }
+                    _ => None,
+                })
+            });
+            let timed_out = since.elapsed() >= CAPTURE_TIMEOUT;
+            if shot.is_some() || timed_out {
+                if let AccountSwitchTransition::Capturing { target, origin, .. } =
+                    std::mem::take(&mut app.account_switch)
+                {
+                    let texture = shot.map(|image| {
+                        ctx.load_texture(
+                            "account-switch-snapshot",
+                            std::sync::Arc::unwrap_or_clone(image),
+                            egui::TextureOptions::LINEAR,
+                        )
+                    });
+                    app.switch_account(&target);
+                    app.reveal_active_account(texture, origin);
+                }
+            } else {
+                ctx.request_repaint();
+                return;
+            }
+        }
+        AccountSwitchTransition::Revealing { .. } => {}
+    }
+
+    let AccountSwitchTransition::Revealing {
+        snapshot,
+        started,
+        origin,
+        account_name,
+        account_detail,
+        account_key,
+        avatar,
+    } = &app.account_switch
+    else {
         return;
     };
+
     if crate::motion::screen_reader_attached(ctx) {
-        app.account_switch_at = None;
+        app.account_switch = AccountSwitchTransition::Idle;
         return;
     }
-    let t = (started.elapsed().as_secs_f32() / DURATION.as_secs_f32()).clamp(0.0, 1.0);
+
+    let elapsed = started.elapsed().as_secs_f32();
+    let t = (elapsed / DURATION_SECS).clamp(0.0, 1.0);
     if t >= 1.0 {
-        app.account_switch_at = None;
+        app.account_switch = AccountSwitchTransition::Idle;
         return;
     }
-    let eased = 1.0 - (1.0 - t).powi(3);
-    let alpha = (1.0 - eased) * 0.90;
-    let mut rect = ctx.content_rect();
-    if app.is_linked() && !narrow(ctx) {
-        let full_list =
-            app.sidebar_mode() == SidebarDisplayMode::Expanded || app.page == Page::Calls;
-        let mut list_width = chats::compact_width(ctx);
-        if full_list {
-            list_width += app.settings.sidebar_width;
-        }
-        let crowded = app.info_visible()
-            && rect.width() - list_width < pane::INFO_MIN + pane::INFO_CONVERSATION_MIN;
-        if !crowded {
-            rect.min.x = (rect.min.x + rail::WIDTH).min(rect.max.x);
-        }
-    }
-    let caption = theme::caption_footprint(ctx);
-    if caption.height > 0.0 {
-        rect.min.y = (rect.min.y + caption.height).min(rect.max.y);
-    }
+
+    let screen = ctx.content_rect();
+    let origin = origin.unwrap_or_else(|| egui::pos2(screen.left() + 30.0, screen.bottom() - 88.0));
+    let progress = 1.0 - (1.0 - t).powi(5);
+    let max_radius = [
+        origin.distance(screen.left_top()),
+        origin.distance(screen.right_top()),
+        origin.distance(screen.right_bottom()),
+        origin.distance(screen.left_bottom()),
+    ]
+    .into_iter()
+    .fold(0.0f32, f32::max)
+    .max(1.0);
+    let hole = progress * (max_radius + FEATHER);
+
     let painter = ctx.layer_painter(egui::LayerId::new(
         egui::Order::Foreground,
-        egui::Id::new("account-switch-fade"),
+        egui::Id::new("account-switch-transition"),
     ));
-    painter.rect_filled(rect, 0.0, app.palette.window.gamma_multiply(alpha));
-    let bar = egui::Rect::from_min_max(
-        rect.min,
-        egui::pos2(
-            (rect.min.x + 2.5 + 10.0 * (1.0 - eased)).min(rect.max.x),
-            rect.max.y,
-        ),
+
+    if let Some(texture) = snapshot {
+        painter.add(account_switch_portal_mesh(
+            screen,
+            texture.id(),
+            origin,
+            hole,
+            FEATHER,
+            max_radius,
+        ));
+    } else {
+        painter.rect_filled(
+            screen,
+            0.0,
+            app.palette
+                .window
+                .gamma_multiply((1.0 - progress) * 0.60),
+        );
+    }
+
+    let wave_r = hole + FEATHER * 0.45;
+    let ring_alpha = (1.0 - t).powf(1.35);
+    painter.circle_stroke(
+        origin,
+        wave_r,
+        Stroke::new(10.0, app.palette.accent.gamma_multiply(ring_alpha * 0.16)),
     );
-    painter.rect_filled(
-        bar,
-        0.0,
-        app.palette.accent.gamma_multiply((1.0 - eased) * 0.65),
+    painter.circle_stroke(
+        origin,
+        wave_r,
+        Stroke::new(2.2, app.palette.accent.gamma_multiply(ring_alpha * 0.88)),
     );
+    if hole > 24.0 {
+        painter.circle_stroke(
+            origin,
+            (wave_r * 0.88).max(1.0),
+            Stroke::new(1.0, app.palette.accent.gamma_multiply(ring_alpha * 0.35)),
+        );
+    }
+
+    let enter = (t / 0.24).clamp(0.0, 1.0);
+    let enter_ease = 1.0 - (1.0 - enter).powi(3);
+    let exit = ((1.0 - t) / 0.30).clamp(0.0, 1.0);
+    let pill_alpha = (enter_ease * exit).clamp(0.0, 1.0);
+    if pill_alpha > 0.01 && screen.width() > 160.0 {
+        let slide_y = -14.0 * (1.0 - enter_ease) + 6.0 * (1.0 - exit);
+        let top = screen.top() + 26.0 + slide_y;
+        let palette = app.palette;
+        let subtitle = account_detail
+            .clone()
+            .unwrap_or_else(|| crate::i18n::gettext(app.locale, "Active account").into_owned());
+        egui::Area::new(egui::Id::new("account-switch-pill"))
+            .order(egui::Order::Foreground)
+            .interactable(false)
+            .constrain(false)
+            .anchor(Align2::CENTER_TOP, vec2(0.0, top - screen.top()))
+            .show(ctx, |ui| {
+                ui.set_opacity(pill_alpha);
+                Frame::new()
+                    .fill(palette.surface.gamma_multiply(0.95))
+                    .stroke(Stroke::new(1.0, palette.accent.gamma_multiply(0.60)))
+                    .corner_radius(CornerRadius::same(22))
+                    .inner_margin(Margin::symmetric(12, 8))
+                    .shadow(egui::Shadow {
+                        offset: [0, 6],
+                        blur: 18,
+                        spread: 0,
+                        color: egui::Color32::from_black_alpha(70),
+                    })
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 10.0;
+                            let (avatar_rect, _) = ui.allocate_exact_size(
+                                egui::Vec2::splat(30.0),
+                                egui::Sense::hover(),
+                            );
+                            widgets::paint_avatar(
+                                ui,
+                                &palette,
+                                avatar_rect,
+                                account_name,
+                                account_key,
+                                avatar.as_deref(),
+                            );
+                            ui.vertical(|ui| {
+                                ui.spacing_mut().item_spacing.y = 1.0;
+                                theme::text(ui, account_name, theme::semibold(13.5), palette.text);
+                                theme::text(
+                                    ui,
+                                    &subtitle,
+                                    theme::regular(11.5),
+                                    palette.secondary,
+                                );
+                            });
+                        });
+                    });
+            });
+    }
+
     ctx.request_repaint();
 }
 
@@ -1827,5 +2014,66 @@ mod idle_tests {
             !shown.iter().any(|text| text == "Message 0"),
             "the oldest never flashes: {shown:?}"
         );
+    }
+
+    #[test]
+    fn account_switch_transition_paints_and_finishes_cleanly() {
+        let root = tempfile::tempdir().unwrap();
+        let mut app = App::headless(
+            crate::paths::AppDirs::under(root.path()),
+            crate::settings::Settings::default(),
+        )
+        .0;
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        app.account_switch = crate::app::AccountSwitchTransition::Revealing {
+            snapshot: None,
+            started: std::time::Instant::now(),
+            origin: Some(egui::pos2(36.0, 620.0)),
+            account_name: "Personal".into(),
+            account_detail: Some("+57 300 000 0000".into()),
+            account_key: "1".into(),
+            avatar: None,
+        };
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1180.0, 780.0),
+                )),
+                ..Default::default()
+            },
+            |ui| account_switch_transition(&mut app, ui.ctx()),
+        );
+        output.textures_delta.clear();
+        assert!(matches!(
+            app.account_switch,
+            crate::app::AccountSwitchTransition::Revealing { .. }
+        ));
+
+        app.account_switch = crate::app::AccountSwitchTransition::Revealing {
+            snapshot: None,
+            started: std::time::Instant::now() - std::time::Duration::from_millis(550),
+            origin: Some(egui::pos2(36.0, 620.0)),
+            account_name: "Personal".into(),
+            account_detail: None,
+            account_key: "1".into(),
+            avatar: None,
+        };
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1180.0, 780.0),
+                )),
+                ..Default::default()
+            },
+            |ui| account_switch_transition(&mut app, ui.ctx()),
+        );
+        output.textures_delta.clear();
+        assert!(matches!(
+            app.account_switch,
+            crate::app::AccountSwitchTransition::Idle
+        ));
     }
 }

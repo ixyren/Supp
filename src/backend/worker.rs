@@ -9155,6 +9155,24 @@ impl Worker {
                     let saved = self.archive.put_sticker_audio_path(&chat, &id, Some(&path));
                     confirmed_download(path, saved)
                 });
+                if let Ok(audio_path) = &result {
+                    if let Ok(Some(msg)) = self.archive.message(&chat, &id)
+                        && let Content::Sticker { media, .. } = &msg.content
+                        && let Some(sticker_path) = &media.path
+                        && let Ok(bytes) = std::fs::read(sticker_path)
+                    {
+                        let hash = super::sticker_store::content_hash(&bytes);
+                        let saved_dir = self.dirs.saved_sticker_dir();
+                        if saved_dir.join(format!("{hash}.webp")).exists() {
+                            super::sticker_store::save_audio_sidecar(
+                                &saved_dir,
+                                &hash,
+                                audio_path,
+                            );
+                        }
+                    }
+                    self.emit_stickers();
+                }
                 self.emit(Event::StickerAudioDownloaded {
                     chat,
                     message: id,

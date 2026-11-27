@@ -85,8 +85,14 @@ pub struct Notifications {
     /// When each limited chat last showed a notification. Shared so a failed
     /// delivery, which happens on the notification's own thread, can undo it.
     throttle: Throttle,
-    /// Active theme palette used by in-process desktop popup cards on Windows.
+    /// Active theme palette and popup preferences used by Windows popup cards.
     palette: crate::theme::Palette,
+    popup_corner: crate::settings::NotificationCorner,
+    popup_size: crate::settings::NotificationSize,
+    popup_duration_secs: u32,
+    popup_progress_bar: bool,
+    popup_opacity: u8,
+    popup_effect: crate::settings::NotificationEffect,
     /// What unit tests would have shown, recorded instead of shown on the
     /// desktop. Always empty outside tests.
     pub shown: Vec<Shown>,
@@ -94,11 +100,18 @@ pub struct Notifications {
 
 impl Default for Notifications {
     fn default() -> Self {
+        let defaults = crate::settings::Settings::default();
         Self {
             pending: Default::default(),
             registered: 0,
             throttle: Default::default(),
             palette: crate::theme::Palette::dark(),
+            popup_corner: defaults.notification_position,
+            popup_size: defaults.notification_size,
+            popup_duration_secs: defaults.notification_duration_secs,
+            popup_progress_bar: defaults.notification_progress_bar,
+            popup_opacity: defaults.notification_opacity,
+            popup_effect: defaults.notification_effect,
             shown: Vec::new(),
         }
     }
@@ -251,9 +264,32 @@ impl Notifications {
         }
     }
 
-    /// Updates the theme palette used for Windows floating popup cards.
-    pub fn set_palette(&mut self, palette: crate::theme::Palette) {
+    /// Updates the theme palette and popup appearance/behavior preferences.
+    pub fn sync_config(
+        &mut self,
+        palette: crate::theme::Palette,
+        settings: &crate::settings::Settings,
+    ) {
         self.palette = palette;
+        self.popup_corner = settings.notification_position;
+        self.popup_size = settings.notification_size;
+        self.popup_duration_secs = settings.notification_duration_secs.clamp(2, 30);
+        self.popup_progress_bar = settings.notification_progress_bar;
+        self.popup_opacity = settings.notification_opacity.clamp(70, 100);
+        self.popup_effect = settings.notification_effect;
+    }
+
+    #[cfg(target_os = "windows")]
+    fn popup_config(&self) -> crate::notify_popup::PopupConfig {
+        crate::notify_popup::PopupConfig {
+            palette: self.palette,
+            corner: self.popup_corner,
+            size: self.popup_size,
+            duration_secs: self.popup_duration_secs,
+            show_progress_bar: self.popup_progress_bar,
+            opacity: self.popup_opacity,
+            effect: self.popup_effect,
+        }
     }
 
     pub fn clear_all(&mut self) {
@@ -300,12 +336,13 @@ impl Notifications {
         #[cfg(target_os = "windows")]
         {
             let _ = failed;
+            let config = self.popup_config();
             deliver_windows(
                 title,
                 body,
                 picture,
                 sound,
-                self.palette,
+                config,
                 target,
                 opened,
                 wake,
@@ -486,7 +523,7 @@ pub fn lines(
     (title, body)
 }
 
-/// Shows a floating Telegram-style popup card on Windows and watches for
+/// Shows a floating square Supp popup card on Windows and watches for
 /// chat-read cancellation without creating a Tokio runtime per notification.
 #[cfg(target_os = "windows")]
 #[expect(clippy::too_many_arguments)]
@@ -495,7 +532,7 @@ fn deliver_windows(
     body: String,
     picture: Option<PathBuf>,
     sound: NotificationSound,
-    palette: crate::theme::Palette,
+    config: crate::notify_popup::PopupConfig,
     target: NotificationTarget,
     opened: Arc<Mutex<Vec<NotificationTarget>>>,
     wake: impl Fn() + Send + Sync + 'static,
@@ -505,22 +542,18 @@ fn deliver_windows(
         return;
     };
     play_sound(sound);
-    let duration = if target.message.is_none() {
-        Duration::from_secs(30)
-    } else {
-        Duration::from_secs(6)
-    };
+    let is_call = target.message.is_none();
     let id = crate::notify_popup::next_id();
     crate::notify_popup::show(crate::notify_popup::PopupRequest {
         id,
         title,
         body,
         picture,
-        palette,
+        config,
         target,
         opened,
         wake: Arc::new(wake),
-        duration,
+        is_call,
     });
     if may_wait {
         let _ = std::thread::Builder::new()
