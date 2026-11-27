@@ -191,17 +191,29 @@ mod frame {
             timeEndPeriod(1);
         }
     }
-    pub fn wait() {
-        std::thread::sleep(Duration::from_millis(8));
+    pub fn wait_remaining(elapsed: Duration) {
+        let budget = Duration::from_millis(8);
+        if let Some(rem) = budget.checked_sub(elapsed) {
+            if !rem.is_zero() {
+                std::thread::sleep(rem);
+            }
+        }
     }
 }
 
 #[cfg(not(target_os = "windows"))]
 mod frame {
+    use std::time::Duration;
+
     pub fn begin() {}
     pub fn end() {}
-    pub fn wait() {
-        std::thread::sleep(std::time::Duration::from_millis(8));
+    pub fn wait_remaining(elapsed: Duration) {
+        let budget = Duration::from_millis(8);
+        if let Some(rem) = budget.checked_sub(elapsed) {
+            if !rem.is_zero() {
+                std::thread::sleep(rem);
+            }
+        }
     }
 }
 
@@ -810,6 +822,7 @@ mod commands {
                 if SWITCH_ANIM_ID.load(Ordering::SeqCst) != anim_id {
                     break;
                 }
+                let step_start = std::time::Instant::now();
                 let p = (start.elapsed().as_secs_f64() / SLIDE_SECS).min(1.0);
                 let ease = cubic_bezier(x1, y1, x2, y2, p);
                 let inc_y = (inc_start_y + (inc_end_y - inc_start_y) * ease).round();
@@ -829,7 +842,7 @@ mod commands {
                 if p >= 1.0 {
                     break;
                 }
-                frame::wait();
+                frame::wait_remaining(step_start.elapsed());
             }
             frame::end();
 
@@ -937,6 +950,7 @@ mod commands {
                     if SIDEBAR_ANIM_ID.load(Ordering::SeqCst) != anim_id {
                         break;
                     }
+                    let step_start = std::time::Instant::now();
                     let p = (start.elapsed().as_secs_f64() / dur).min(1.0);
                     let ease = cubic_bezier(x1, y1, x2, y2, p);
                     let w = (curr_w + (target_w - curr_w) * ease).round();
@@ -953,7 +967,7 @@ mod commands {
                     if p >= 1.0 {
                         break;
                     }
-                    frame::wait();
+                    frame::wait_remaining(step_start.elapsed());
                 }
                 frame::end();
 
@@ -994,6 +1008,7 @@ mod commands {
         let clean_id = sanitize_session_id(&session_id)?;
         let label = format!("session_{}", clean_id);
 
+        let mut was_active = false;
         if let Some(st) = app.try_state::<AppState>() {
             let mut guard = st
                 .active_session_id
@@ -1001,9 +1016,12 @@ mod commands {
                 .unwrap_or_else(|e| e.into_inner());
             if guard.as_deref() == Some(clean_id) {
                 *guard = None;
+                was_active = true;
             }
         }
-        SWITCH_ANIM_ID.fetch_add(1, Ordering::SeqCst);
+        if was_active {
+            SWITCH_ANIM_ID.fetch_add(1, Ordering::SeqCst);
+        }
 
         if let Some(wv) = app.get_webview(&label) {
             let _ = wv.close();
@@ -1047,6 +1065,28 @@ mod commands {
             session_id: String,
         }
         let _ = app.emit("session-ready", ReadyPayload { session_id });
+    }
+
+    #[tauri::command]
+    pub fn report_session_avatar(app: AppHandle, session_id: String, avatar_data_url: String) {
+        let Ok(clean_id) = sanitize_session_id(&session_id) else {
+            return;
+        };
+        if !avatar_data_url.starts_with("data:image/") || avatar_data_url.len() > 200_000 {
+            return;
+        }
+        #[derive(Serialize, Clone)]
+        struct AvatarPayload {
+            session_id: String,
+            avatar: String,
+        }
+        let _ = app.emit(
+            "session-avatar-update",
+            AvatarPayload {
+                session_id: clean_id.to_string(),
+                avatar: avatar_data_url,
+            },
+        );
     }
 
     #[tauri::command]
@@ -1221,6 +1261,7 @@ pub fn run() {
             commands::copy_video_to_clipboard,
             commands::report_unread,
             commands::report_session_ready,
+            commands::report_session_avatar,
             commands::report_webview_click,
             commands::show_toast,
         ])

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { motion as Motion, AnimatePresence } from 'framer-motion';
+import { motion as Motion } from 'framer-motion';
 import { Bridge } from './bridge';
 import { EASE_EMPHASIZED, DEFAULT_AVATAR } from './components/motionTokens';
 import { IntroScreen } from './components/IntroScreen';
@@ -141,12 +141,12 @@ function App() {
     localStorage.setItem('whatsapp_instances', JSON.stringify(instances));
   }, [instances]);
 
-  // Sync Tauri native sidebar bounds automatically whenever expansion or active tab changes
+  // Sync Tauri native sidebar bounds automatically whenever expansion changes on an active session
   useEffect(() => {
-    if (Bridge.isTauri() && !introVisible) {
-      Bridge.updateSidebarBounds(activeTab, isSidebarExpanded ? 280.0 : 80.0);
+    if (Bridge.isTauri() && !introVisible && activeTabRef.current !== 'settings') {
+      Bridge.updateSidebarBounds(activeTabRef.current, isSidebarExpanded ? 280.0 : 80.0);
     }
-  }, [isSidebarExpanded, activeTab, introVisible]);
+  }, [isSidebarExpanded, introVisible]);
 
   const triggerNotification = useCallback((notif) => {
     setNotification(notif);
@@ -309,6 +309,28 @@ function App() {
       if (typeof unlisten === 'function') unlisten();
     };
   }, [handleSessionReady]);
+
+  // Listen for extracted WhatsApp profile avatars
+  useEffect(() => {
+    if (!Bridge.isTauri()) return;
+    let cancelled = false;
+    let unlisten = null;
+
+    Bridge.listenSessionAvatar((sessionId, avatar) => {
+      handleUpdateSession(sessionId, { avatar });
+    }).then((fn) => {
+      if (cancelled) {
+        if (typeof fn === 'function') fn();
+        return;
+      }
+      if (typeof fn === 'function') unlisten = fn;
+    });
+
+    return () => {
+      cancelled = true;
+      if (typeof unlisten === 'function') unlisten();
+    };
+  }, [handleUpdateSession]);
 
   // Ensure abrupt pointer exit out of main WebView collapses the sidebar cleanly
   useEffect(() => {
@@ -551,35 +573,58 @@ function App() {
   }, []);
 
   const handleTabChange = useCallback(
-    (targetTabId) => {
+    async (targetTabId) => {
       if (targetTabId === activeTabRef.current) return;
       const list = instancesRef.current;
-      const prevIdx = getTabIndex(activeTabRef.current, list);
+      const prevTab = activeTabRef.current;
+      const prevIdx = getTabIndex(prevTab, list);
       const nextIdx = getTabIndex(targetTabId, list);
       const dir = nextIdx > prevIdx ? 1 : -1;
-      const prevTab = activeTabRef.current;
 
       setContextMenu(null);
       setPanelTemporarilyOpen(false);
       setSlideDirection(dir);
-      activeTabRef.current = targetTabId;
-      setActiveTab(targetTabId);
 
       if (targetTabId === 'settings') {
         setNotification(null);
+        activeTabRef.current = 'settings';
+        if (Bridge.isTauri()) {
+          const liveW = isSidebarExpandedRef.current ? 280.0 : 80.0;
+          try {
+            await Bridge.switchSession(
+              'settings',
+              list.map((i) => i.id),
+              liveW,
+              dir,
+              prevTab
+            );
+          } catch (err) {
+            console.error('Error switching to settings:', err);
+          }
+        }
+        if (activeTabRef.current === 'settings') {
+          setActiveTab('settings');
+        }
+        return;
       }
+
+      activeTabRef.current = targetTabId;
+      setActiveTab(targetTabId);
 
       if (Bridge.isTauri()) {
         const liveW = isSidebarExpandedRef.current ? 280.0 : 80.0;
-        Bridge.switchSession(
-          targetTabId,
-          list.map((i) => i.id),
-          liveW,
-          dir,
-          prevTab
-        ).catch((err) => {
+        const switchDir = prevTab === 'settings' ? 0 : dir;
+        try {
+          await Bridge.switchSession(
+            targetTabId,
+            list.map((i) => i.id),
+            liveW,
+            switchDir,
+            prevTab
+          );
+        } catch (err) {
           console.error('Error switching session:', err);
-        });
+        }
       }
     },
     [getTabIndex]
@@ -675,9 +720,6 @@ function App() {
 
     const prevTab = activeTabRef.current;
     setContextMenu(null);
-    setSlideDirection(1);
-    activeTabRef.current = newInstance.id;
-    setActiveTab(newInstance.id);
 
     triggerNotification({
       message: 'Preparando entorno aislado para nueva sesión...',
@@ -685,16 +727,24 @@ function App() {
     });
 
     try {
+      const liveW = isSidebarExpandedRef.current ? 280.0 : 80.0;
       if (Bridge.isTauri()) {
-        const liveW = isSidebarExpandedRef.current ? 280.0 : 80.0;
         await Bridge.createSessionWebview(newInstance.id, liveW, false);
-        const latestList = instancesRef.current;
+      }
+
+      const latestList = instancesRef.current;
+      const switchDir = prevTab === 'settings' ? 0 : 1;
+      setSlideDirection(switchDir);
+      activeTabRef.current = newInstance.id;
+      setActiveTab(newInstance.id);
+
+      if (Bridge.isTauri()) {
         const finalW = isSidebarExpandedRef.current ? 280.0 : 80.0;
         await Bridge.switchSession(
           newInstance.id,
           latestList.map((i) => i.id),
           finalW,
-          1,
+          switchDir,
           prevTab
         );
         // Re-sync in case pointer left sidebar while webview creation/switch was in flight
@@ -744,11 +794,10 @@ function App() {
           nextTab === 'settings'
             ? newInst.length
             : newInst.findIndex((i) => i.id === nextTab);
-        const dir = nextIdx >= deletedIdx ? 1 : -1;
+        const visualDir = nextIdx >= deletedIdx ? 1 : -1;
 
-        setSlideDirection(dir);
+        setSlideDirection(visualDir);
         activeTabRef.current = nextTab;
-        setActiveTab(nextTab);
 
         if (Bridge.isTauri()) {
           const keepExpanded =
@@ -760,14 +809,17 @@ function App() {
               nextTab,
               newInst.map((i) => i.id),
               liveW,
-              dir,
+              0,
               id
             );
-            Bridge.updateSidebarBounds(nextTab, liveW);
+            if (nextTab !== 'settings') {
+              Bridge.updateSidebarBounds(nextTab, liveW);
+            }
           } catch (err) {
             console.error('Error switching after delete:', err);
           }
         }
+        setActiveTab(nextTab);
       }
 
       if (Bridge.isTauri()) {
@@ -945,37 +997,34 @@ function App() {
       />
 
       {/* Main Content Area (Settings & Empty-State Dashboard) */}
-      <AnimatePresence mode="wait">
-        {activeTab === 'settings' && (
-          <Motion.main
-            key="settings-main"
-            initial={{ opacity: 0, y: slideDirection > 0 ? 28 : -28, scale: 0.985 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: slideDirection > 0 ? -20 : 20, scale: 0.985 }}
-            transition={{ duration: 0.24, ease: EASE_EMPHASIZED }}
-            style={{ willChange: 'transform, opacity' }}
-            className="flex-1 h-full relative overflow-hidden bg-[#12150e]"
-          >
-            <PreferencesPanel
-              settings={{
-                openAtLogin: startWithWindows,
-                startMinimized: startMinimized,
-                closeToTray: closeToTray,
-                hoverExpandEnabled: hoverExpandEnabled,
-              }}
-              instances={instances}
-              isAddingSession={isAddingSession}
-              canReloadSession={canReloadSession}
-              toggleSetting={handleToggleSetting}
-              onAddInstance={handleAddInstance}
-              onSelectSession={handleTabChange}
-              onRenameSession={(id, newName) => handleUpdateSession(id, { name: newName })}
-              onReloadSession={handleReloadSession}
-              onDeleteSession={requestDeleteSession}
-            />
-          </Motion.main>
-        )}
-      </AnimatePresence>
+      {activeTab === 'settings' && (
+        <Motion.main
+          key="settings-main"
+          initial={{ opacity: 0, y: slideDirection >= 0 ? 12 : -12 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.18, ease: EASE_EMPHASIZED }}
+          style={{ willChange: 'transform, opacity' }}
+          className="flex-1 h-full relative overflow-hidden bg-[#12150e]"
+        >
+          <PreferencesPanel
+            settings={{
+              openAtLogin: startWithWindows,
+              startMinimized: startMinimized,
+              closeToTray: closeToTray,
+              hoverExpandEnabled: hoverExpandEnabled,
+            }}
+            instances={instances}
+            isAddingSession={isAddingSession}
+            canReloadSession={canReloadSession}
+            toggleSetting={handleToggleSetting}
+            onAddInstance={handleAddInstance}
+            onSelectSession={handleTabChange}
+            onRenameSession={(id, newName) => handleUpdateSession(id, { name: newName })}
+            onReloadSession={handleReloadSession}
+            onDeleteSession={requestDeleteSession}
+          />
+        </Motion.main>
+      )}
 
       {/* Non-Tauri fallback webviews (Electron or Browser dev preview) */}
       {!Bridge.isTauri() &&

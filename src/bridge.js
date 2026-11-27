@@ -224,6 +224,21 @@ export const Bridge = {
     return () => {};
   },
 
+  listenSessionAvatar: async (callback) => {
+    if (Bridge.isTauri()) {
+      try {
+        return await listen('session-avatar-update', (event) => {
+          if (event.payload && event.payload.session_id && event.payload.avatar) {
+            callback(event.payload.session_id, event.payload.avatar);
+          }
+        });
+      } catch (e) {
+        console.warn('Error listening for session avatar in Tauri:', e);
+      }
+    }
+    return () => {};
+  },
+
   listenWebviewClick: async (callback) => {
     if (Bridge.isTauri()) {
       try {

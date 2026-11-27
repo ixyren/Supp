@@ -133,7 +133,7 @@ export function PreferencesPanel({
   return (
     <div className="absolute inset-0 z-10 bg-[#12150e] text-[#e7ebdc] select-none overflow-y-auto scrollbar-thin">
       {/* Static ambient radial surface accent (zero blur filter) */}
-      <div className="fixed inset-0 bg-[radial-gradient(ellipse_75%_50%_at_58%_0%,rgba(198,255,0,0.065)_0%,transparent_72%)] pointer-events-none" />
+      <div className="absolute inset-0 bg-[radial-gradient(ellipse_75%_50%_at_58%_0%,rgba(198,255,0,0.065)_0%,transparent_72%)] pointer-events-none" />
 
       <div className="relative z-10 max-w-5xl mx-auto px-6 sm:px-8 py-8 flex flex-col gap-5">
         {/* Bento Row 1: Hero Header Card */}

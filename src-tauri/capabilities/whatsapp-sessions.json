@@ -15,6 +15,7 @@
   "permissions": [
     "allow-report-unread",
     "allow-report-session-ready",
+    "allow-report-session-avatar",
     "allow-report-webview-click",
     "allow-open-external-url",
     "allow-copy-image-to-clipboard",

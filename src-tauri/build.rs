@@ -18,6 +18,7 @@ fn main() {
         "copy_video_to_clipboard",
         "report_unread",
         "report_session_ready",
+        "report_session_avatar",
         "report_webview_click",
         "show_toast",
       ]),

@@ -56,6 +56,11 @@ pub fn build_init_script(session_id: &str) -> String {
         if (readyReported) return;
         readyReported = true;
         invokeCmd('report_session_ready', {{ sessionId: SESSION_ID }});
+        setTimeout(() => {{
+            if (typeof extractProfileAvatar === 'function') {{
+                extractProfileAvatar();
+            }}
+        }}, 1200);
     }};
 
     const checkWhatsAppReady = () => {{
@@ -567,6 +572,117 @@ pub fn build_init_script(session_id: &str) -> String {
         e.stopPropagation();
         showMediaMenu(e, target);
     }}, true);
+
+    // ── Extracción automática de foto de perfil de la cuenta iniciada ─────────
+    let lastAvatarSig = '';
+    let avatarExtracting = false;
+
+    const findProfileAvatarImg = () => {{
+        const selectors = [
+            'header [data-testid="menu-bar-profile"] img',
+            'header button[aria-label*="Perfil" i] img, header button[aria-label*="Profile" i] img',
+            '#side header img',
+            'header img[src*="pps.whatsapp.net"], header img[src^="blob:"], header img[src^="data:image/"]'
+        ];
+
+        for (const selector of selectors) {{
+            const nodes = document.querySelectorAll(selector);
+            for (const img of nodes) {{
+                if (!img || !img.tagName || img.tagName.toUpperCase() !== 'IMG') continue;
+                if (img.closest && img.closest('#pane-side')) continue;
+                if (!isElementVisible(img)) continue;
+                if (!img.complete || img.naturalWidth < 24 || img.naturalHeight < 24) continue;
+                const rect = img.getBoundingClientRect();
+                if (rect.width < 20 || rect.height < 20) continue;
+                const src = img.currentSrc || img.src || '';
+                if (!src) continue;
+                return {{ img, src }};
+            }}
+        }}
+        return null;
+    }};
+
+    const renderAvatarToDataUrl = (source) => {{
+        const size = 96;
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) throw new Error('Contexto 2D no disponible');
+        ctx.drawImage(source, 0, 0, size, size);
+        try {{
+            const jpeg = canvas.toDataURL('image/jpeg', 0.86);
+            if (jpeg && jpeg.startsWith('data:image/')) return jpeg;
+        }} catch (_) {{}}
+        return canvas.toDataURL('image/png');
+    }};
+
+    const decodeBlobAvatarDataUrl = async (blob) => {{
+        if (typeof createImageBitmap === 'function') {{
+            try {{
+                const bitmap = await createImageBitmap(blob);
+                try {{
+                    return renderAvatarToDataUrl(bitmap);
+                }} finally {{
+                    bitmap.close();
+                }}
+            }} catch (_) {{}}
+        }}
+
+        const objUrl = URL.createObjectURL(blob);
+        try {{
+            const loader = await new Promise((resolve, reject) => {{
+                const img = new Image();
+                img.onload = () => resolve(img);
+                img.onerror = () => reject(new Error('No se pudo cargar avatar'));
+                img.src = objUrl;
+            }});
+            return renderAvatarToDataUrl(loader);
+        }} finally {{
+            URL.revokeObjectURL(objUrl);
+        }}
+    }};
+
+    async function extractProfileAvatar() {{
+        if (avatarExtracting) return;
+        if (!isWhatsappHost(location.hostname)) return;
+
+        const found = findProfileAvatarImg();
+        if (!found) return;
+
+        const {{ img, src }} = found;
+        const sig = src + '|' + img.naturalWidth + 'x' + img.naturalHeight;
+        if (sig === lastAvatarSig) return;
+
+        avatarExtracting = true;
+        try {{
+            let dataUrl = null;
+            try {{
+                dataUrl = renderAvatarToDataUrl(img);
+            }} catch (_) {{
+                dataUrl = null;
+            }}
+
+            if (!dataUrl || !dataUrl.startsWith('data:image/') || dataUrl.length > 200000) {{
+                const blob = await fetchBlobWithFallback(src);
+                dataUrl = await decodeBlobAvatarDataUrl(blob);
+            }}
+
+            if (dataUrl && dataUrl.startsWith('data:image/') && dataUrl.length <= 200000) {{
+                lastAvatarSig = sig;
+                await invokeCmdStrict('report_session_avatar', {{
+                    sessionId: SESSION_ID,
+                    avatarDataUrl: dataUrl
+                }});
+            }}
+        }} catch (_) {{
+            // Reintentar en el próximo ciclo si la imagen aún carga o hay error CORS transitorio
+        }} finally {{
+            avatarExtracting = false;
+        }}
+    }}
+
+    setInterval(extractProfileAvatar, 2500);
 }})();
 "#,
         session_id_json = session_id_json

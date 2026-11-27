@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-report-session-avatar"
+description = "Enables the report_session_avatar command without any pre-configured scope."
+commands.allow = ["report_session_avatar"]
+
+[[permission]]
+identifier = "deny-report-session-avatar"
+description = "Denies the report_session_avatar command without any pre-configured scope."
+commands.deny = ["report_session_avatar"]
