@@ -599,7 +599,7 @@ pub fn build_init_script(session_id: &str) -> String {
             '[data-testid="menu-bar-profile"] img',
             '[aria-label*="Perfil" i] img, [aria-label*="Profile" i] img',
             '#side header img',
-            'header img[src*="pps.whatsapp.net"], header img[src^="blob:"], header img[src^="data:image/"], nav img[src*="pps.whatsapp.net"], nav img[src^="blob:"], nav img[src^="data:image/"]'
+            'header img[src*="pps.whatsapp.net"], header img[src*="whatsapp.net"], header img[src*="fbcdn.net"], header img[src^="blob:"], header img[src^="data:image/"], nav img[src*="pps.whatsapp.net"], nav img[src*="whatsapp.net"], nav img[src*="fbcdn.net"], nav img[src^="blob:"], nav img[src^="data:image/"]'
         ];
 
         for (const selector of selectors) {{
@@ -611,7 +611,7 @@ pub fn build_init_script(session_id: &str) -> String {
             }}
         }}
 
-        const fallbackImgs = document.querySelectorAll('img[src*="pps.whatsapp.net"], img[src^="blob:"], img[src^="data:image/"]');
+        const fallbackImgs = document.querySelectorAll('img[src*="pps.whatsapp.net"], img[src*="whatsapp.net"], img[src*="fbcdn.net"], img[src^="blob:"], img[src^="data:image/"]');
         for (const img of fallbackImgs) {{
             if (!isAvatarCandidate(img, true)) continue;
             const src = img.currentSrc || img.src || '';
@@ -674,27 +674,35 @@ pub fn build_init_script(session_id: &str) -> String {
 
         avatarExtracting = true;
         try {{
-            let dataUrl = null;
+            let avatarPayload = null;
             try {{
-                dataUrl = renderAvatarToDataUrl(img);
+                avatarPayload = renderAvatarToDataUrl(img);
             }} catch (_) {{
-                dataUrl = null;
+                avatarPayload = null;
             }}
 
-            if (!dataUrl || !dataUrl.startsWith('data:image/') || dataUrl.length > 200000) {{
-                const blob = await fetchBlobWithFallback(src);
-                dataUrl = await decodeBlobAvatarDataUrl(blob);
+            if (!avatarPayload || !avatarPayload.startsWith('data:image/') || avatarPayload.length > 200000) {{
+                try {{
+                    const blob = await fetchBlobWithFallback(src);
+                    avatarPayload = await decodeBlobAvatarDataUrl(blob);
+                }} catch (_) {{
+                    avatarPayload = null;
+                }}
             }}
 
-            if (dataUrl && dataUrl.startsWith('data:image/') && dataUrl.length <= 200000) {{
-                lastAvatarSig = sig;
+            if ((!avatarPayload || !avatarPayload.startsWith('data:image/') || avatarPayload.length > 200000) && /^https:\/\//i.test(src)) {{
+                avatarPayload = src;
+            }}
+
+            if (avatarPayload && ((avatarPayload.startsWith('data:image/') && avatarPayload.length <= 200000) || /^https:\/\//i.test(avatarPayload))) {{
                 await invokeCmdStrict('report_session_avatar', {{
                     sessionId: SESSION_ID,
-                    avatarDataUrl: dataUrl
+                    avatarDataUrl: avatarPayload
                 }});
+                lastAvatarSig = sig;
             }}
         }} catch (_) {{
-            // Reintentar en el próximo ciclo si la imagen aún carga o hay error CORS transitorio
+            // Reintentar en el próximo ciclo si la imagen aún carga o hay error transitorio
         }} finally {{
             avatarExtracting = false;
         }}

@@ -67,6 +67,30 @@ fn clamp_sidebar_width(width: f64) -> f64 {
     }
 }
 
+fn is_allowed_avatar_payload(raw: &str) -> bool {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    if trimmed.starts_with("data:image/") {
+        return trimmed.len() <= 200_000;
+    }
+    if trimmed.len() > 4096 {
+        return false;
+    }
+    let Ok(parsed) = tauri::Url::parse(trimmed) else {
+        return false;
+    };
+    if parsed.scheme() != "https" {
+        return false;
+    }
+    let Some(host) = parsed.host_str() else {
+        return false;
+    };
+    let h = host.trim_end_matches('.').to_ascii_lowercase();
+    external_url::is_whatsapp_host(&h) || h == "fbcdn.net" || h.ends_with(".fbcdn.net")
+}
+
 fn get_window_logical_size(window: &tauri::Window) -> Option<LogicalSize<f64>> {
     if window.is_minimized().unwrap_or(false) {
         return None;
@@ -1072,7 +1096,7 @@ mod commands {
         let Ok(clean_id) = sanitize_session_id(&session_id) else {
             return;
         };
-        if !avatar_data_url.starts_with("data:image/") || avatar_data_url.len() > 200_000 {
+        if !is_allowed_avatar_payload(&avatar_data_url) {
             return;
         }
         #[derive(Serialize, Clone)]
@@ -1084,7 +1108,7 @@ mod commands {
             "session-avatar-update",
             AvatarPayload {
                 session_id: clean_id.to_string(),
-                avatar: avatar_data_url,
+                avatar: avatar_data_url.trim().to_string(),
             },
         );
     }
@@ -1289,5 +1313,19 @@ mod tests {
         assert_eq!(clamp_sidebar_width(180.0), 180.0);
         assert_eq!(clamp_sidebar_width(500.0), 280.0);
         assert_eq!(clamp_sidebar_width(f64::NAN), 80.0);
+    }
+
+    #[test]
+    fn validates_avatar_payloads() {
+        assert!(is_allowed_avatar_payload("data:image/jpeg;base64,/9j/4AAQ"));
+        assert!(is_allowed_avatar_payload("https://pps.whatsapp.net/v/t61.24694-24/abc.jpg?oe=123"));
+        assert!(is_allowed_avatar_payload("https://scontent.fbcdn.net/v/t39/avatar.jpg"));
+        assert!(is_allowed_avatar_payload("https://web.whatsapp.com/avatar.png"));
+
+        assert!(!is_allowed_avatar_payload(""));
+        assert!(!is_allowed_avatar_payload("javascript:alert(1)"));
+        assert!(!is_allowed_avatar_payload("http://pps.whatsapp.net/avatar.jpg"));
+        assert!(!is_allowed_avatar_payload("https://evil.example.com/avatar.jpg"));
+        assert!(!is_allowed_avatar_payload("https://whatsapp.net.evil.com/a.jpg"));
     }
 }

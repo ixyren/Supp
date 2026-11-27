@@ -11,6 +11,7 @@ export function SessionAvatar({ src, alt, className = '' }) {
     <img
       src={src || DEFAULT_AVATAR}
       alt={alt}
+      referrerPolicy="no-referrer"
       onError={(e) => {
         if (e.currentTarget.src !== DEFAULT_AVATAR) {
           e.currentTarget.src = DEFAULT_AVATAR;
