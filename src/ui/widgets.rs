@@ -1174,6 +1174,8 @@ pub const AUTHOR_URL: &str = "https://github.com/ixyren";
 pub const ZAPFAST_URL: &str = "https://github.com/crmne/zapfast";
 /// Original ZapFast author website URL.
 pub const CARMINE_URL: &str = "https://paolino.me";
+/// `iamcal` npm profile providing Apple, Google, Twitter, and Facebook emoji styles.
+pub const IAMCAL_URL: &str = "https://www.npmjs.com/~iamcal";
 
 /// Draws the credit lines naming ZapFast (Carmine Paolino) and Supp (iXyren),
 /// returning the URL if any author/project link was clicked.
@@ -1218,6 +1220,23 @@ pub fn credit(ui: &mut Ui, palette: &Palette, locale: crate::i18n::Locale) -> Op
         }
         if !after.is_empty() {
             theme::text(ui, after, theme::regular(13.0), palette.secondary);
+        }
+    });
+    let emoji_credit = crate::i18n::gettext(locale, "Emoji styles by {iamcal}.");
+    let (before_cal, after_cal) = emoji_credit
+        .split_once("{iamcal}")
+        .unwrap_or((&emoji_credit, ""));
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
+        theme::text(ui, before_cal, theme::regular(13.0), palette.secondary);
+        if theme::link(ui, "iamcal", theme::medium(13.0), palette.link)
+            .on_hover_text(IAMCAL_URL)
+            .clicked()
+        {
+            clicked = Some(IAMCAL_URL);
+        }
+        if !after_cal.is_empty() {
+            theme::text(ui, after_cal, theme::regular(13.0), palette.secondary);
         }
     });
     clicked

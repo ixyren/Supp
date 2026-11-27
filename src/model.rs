@@ -1563,6 +1563,18 @@ impl Content {
             *new = Some(old.clone());
         }
         if let (
+            Self::Sticker { audio: new, .. },
+            Self::Sticker {
+                audio: Some(old), ..
+            },
+        ) = (&mut *self, old)
+        {
+            match new {
+                Some(track) => track.path = old.path.clone(),
+                None => *new = Some(old.clone()),
+            }
+        }
+        if let (
             Self::Interactive {
                 card: Some(new), ..
             },
@@ -1599,6 +1611,19 @@ impl Content {
                 .is_none_or(|new| new.path.is_none() && old.path.is_some())
         {
             *new = Some(old.clone());
+        }
+        if let (
+            Self::Sticker { audio: new, .. },
+            Self::Sticker {
+                audio: Some(old), ..
+            },
+        ) = (&mut *self, other)
+        {
+            match new {
+                Some(track) if track.path.is_none() => track.path = old.path.clone(),
+                None => *new = Some(old.clone()),
+                _ => {}
+            }
         }
         if let (
             Self::Interactive {
@@ -3304,6 +3329,8 @@ pub enum Action {
     SetTheme(crate::settings::ThemeChoice),
     /// Draws the interface in the platform's font or in the bundled Inter.
     SetFont(crate::settings::FontChoice),
+    /// Chooses the emoji artwork set (`System`, `Apple`, `Google`, `Twitter`, `Facebook`).
+    SetEmojiStyle(crate::settings::EmojiStyle),
     /// Windows and Linux: draws ZapFast's own title bar and window buttons
     /// (`true`) or the desktop's. Decorations are fixed when a window is
     /// made, so the window is replaced.

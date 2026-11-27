@@ -2750,6 +2750,7 @@ impl App {
         ));
         // Colour emoji in labels, menus, tooltips and text fields; message
         // bodies paint their own over placeholders, which it leaves alone.
+        crate::emoji::set_style(ctx, self.settings.emoji_style, self.dirs.emoji_cache_dir());
         ctx.add_plugin(crate::emoji::plugin());
         crate::theme::set_font(ctx, self.settings.font);
         crate::theme::install(ctx);
@@ -4580,7 +4581,7 @@ impl App {
                             if want_voice {
                                 self.voice_wanted = None;
                                 if open {
-                                    self.actions.push(Action::PlayVoice { message, path });
+                                    self.play_sticker_audio(message, path);
                                 }
                             }
                         }
@@ -7869,6 +7870,22 @@ impl App {
                 self.backend.send(Command::DownloadMotion { chat, message });
             }
             Action::ToggleStickerAudio { chat, message } => {
+                if matches!(
+                    self.player.status(&message).state,
+                    crate::audio::State::Playing | crate::audio::State::Loading
+                ) {
+                    self.player.stop();
+                    if self
+                        .voice_wanted
+                        .as_ref()
+                        .is_some_and(|(wanted_chat, wanted, _)| {
+                            wanted_chat == &chat && wanted == &message
+                        })
+                    {
+                        self.voice_wanted = None;
+                    }
+                    return;
+                }
                 let state = self.sticker_audio_mut(&chat, &message).map(|audio| {
                     (
                         audio.path.clone(),
@@ -7876,11 +7893,19 @@ impl App {
                     )
                 });
                 match state {
-                    Some((Some(path), _)) => self.play_voice(message, path),
+                    Some((Some(path), _)) => self.play_sticker_audio(message, path),
                     Some((None, true)) => {
+                        self.player.stop();
+                        self.video.stop();
+                        self.voice_chat = None;
+                        self.voice_clip_chat = None;
                         self.voice_wanted = Some((chat, message, Instant::now()));
                     }
                     Some((None, false)) => {
+                        self.player.stop();
+                        self.video.stop();
+                        self.voice_chat = None;
+                        self.voice_clip_chat = None;
                         if let Some(audio) = self.sticker_audio_mut(&chat, &message) {
                             audio.state = MediaState::Downloading;
                         }
@@ -9716,6 +9741,14 @@ impl App {
                 crate::theme::set_font(ctx, choice);
                 ctx.request_repaint();
             }
+            Action::SetEmojiStyle(style) => {
+                if self.settings.emoji_style != style {
+                    self.settings.emoji_style = style;
+                    self.mark_settings_dirty();
+                    crate::emoji::set_style(ctx, style, self.dirs.emoji_cache_dir());
+                    ctx.request_repaint();
+                }
+            }
             Action::SetCustomTitlebar(custom) => {
                 if self.settings.custom_titlebar != custom {
                     self.settings.custom_titlebar = custom;
@@ -11064,6 +11097,27 @@ impl App {
         self.tell_played(message);
     }
 
+    /// Plays a sticker's embedded audio once at 1x speed, muting any other
+    /// playing sticker/voice clip immediately, or mutes it if already active.
+    fn play_sticker_audio(&mut self, message: String, path: PathBuf) {
+        self.video.stop();
+        self.voice_wanted = None;
+        self.voice_chat = None;
+        self.voice_clip_chat = None;
+        self.player.set_speed(1.0);
+        if matches!(
+            self.player.status(&message).state,
+            crate::audio::State::Playing | crate::audio::State::Loading
+        ) {
+            self.player.stop();
+            return;
+        }
+        self.player.stop();
+        if let Err(error) = self.player.seek(&message, &path, 0.0) {
+            self.toast_error(error);
+        }
+    }
+
     /// Gives `chat` its own voice message speed, or `None` to follow
     /// Settings.
     fn set_chat_voice_speed(&mut self, chat: ChatId, speed: Option<f32>) {
@@ -11147,6 +11201,14 @@ impl App {
         let Some(chat) = self.open_chat.clone() else {
             return;
         };
+        if self
+            .conversations
+            .get(&chat)
+            .and_then(|conversation| conversation.message(finished))
+            .is_some_and(|message| matches!(message.content, Content::Sticker { .. }))
+        {
+            return;
+        }
         if self.voice_chat.as_ref() != Some(&chat) {
             return;
         }
@@ -20642,6 +20704,85 @@ mod tests {
             .push(Action::PlayVideoWhenDownloaded("video".into()));
         app.apply_actions(&ctx);
         assert!(app.voice_wanted.is_none() && app.voice_chat.is_none());
+    }
+
+    #[test]
+    fn sticker_audio_toggles_mutes_previous_and_does_not_advance_voice() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut app = App::headless(AppDirs::under(directory.path()), Settings::default()).0;
+        let (backend, mut commands) = Backend::recording();
+        app.backend = backend;
+        let ctx = egui::Context::default();
+        let chat = "1@s.whatsapp.net";
+        app.open_chat = Some(chat.into());
+
+        let audio_sticker = |id: &str, at: i64, audio_path: Option<&str>| {
+            let mut row = message(chat, id, at);
+            row.content = Content::Sticker {
+                media: crate::model::Media {
+                    mime: "image/webp".into(),
+                    size: 128,
+                    width: Some(512),
+                    height: Some(512),
+                    album: None,
+                    path: Some(PathBuf::from(format!("{id}.webp"))),
+                    state: MediaState::Idle,
+                },
+                animated: true,
+                audio: Some(crate::model::Media {
+                    mime: "audio/ogg; codecs=opus".into(),
+                    size: 1024,
+                    width: None,
+                    height: None,
+                    album: None,
+                    path: audio_path.map(PathBuf::from),
+                    state: MediaState::Idle,
+                }),
+            };
+            row
+        };
+
+        app.conversations.entry(chat.into()).or_default().merge(
+            vec![
+                audio_sticker("st1", 1, Some("st1.ogg")),
+                audio_sticker("st2", 2, None),
+                voice(chat, "v1", 3, Some("v1.ogg")),
+            ],
+            false,
+        );
+
+        // Simulate st1 currently loading/playing, then switching to undownloaded st2:
+        // st1 must stop immediately and st2 download begins.
+        app.apply(
+            Action::ToggleStickerAudio {
+                chat: chat.into(),
+                message: "st1".into(),
+            },
+            &ctx,
+        );
+        assert!(matches!(
+            app.player.status("st1").state,
+            crate::audio::State::Loading | crate::audio::State::Playing | crate::audio::State::Idle
+        ));
+        assert!(app.voice_chat.is_none(), "stickers must not start a voice run");
+
+        app.apply(
+            Action::ToggleStickerAudio {
+                chat: chat.into(),
+                message: "st2".into(),
+            },
+            &ctx,
+        );
+        assert!(!app.player.is_playing(), "switching to st2 stops st1 immediately");
+        assert!(matches!(
+            commands.try_recv().unwrap(),
+            Command::DownloadStickerAudio { message, .. } if message == "st2"
+        ));
+
+        // Finishing an audio sticker never queues the next voice message.
+        app.voice_chat = Some(chat.into());
+        app.continue_voice("st1");
+        assert!(app.actions.is_empty());
     }
 
     #[test]

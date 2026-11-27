@@ -623,12 +623,20 @@ fn decode_file(path: &Path) -> Result<Vec<f32>, String> {
         std::fs::File::open(path).map_err(|error| format!("Could not read the audio: {error}"))?;
     // From a file, so the decoder knows its length and may seek: an M4A whose
     // index (moov) follows its audio, as many recorders write it, needs both.
-    let decoder = rodio::Decoder::try_from(file)
-        .map_err(|error| format!("Could not decode the audio: {error}"))?;
-    let channels = decoder.channels().get();
-    let rate = decoder.sample_rate().get();
-    let interleaved: Vec<f32> = decoder.collect();
-    Ok(voice::mono_at_rate(&interleaved, channels, rate))
+    match rodio::Decoder::try_from(file) {
+        Ok(decoder) => {
+            let channels = decoder.channels().get();
+            let rate = decoder.sample_rate().get();
+            let interleaved: Vec<f32> = decoder.collect();
+            if !interleaved.is_empty() {
+                return Ok(voice::mono_at_rate(&interleaved, channels, rate));
+            }
+            crate::video::decode_aac_track(path)
+                .map_err(|_| "Could not decode the audio: empty stream".to_owned())
+        }
+        Err(error) => crate::video::decode_aac_track(path)
+            .map_err(|_| format!("Could not decode the audio: {error}")),
+    }
 }
 
 type Outcome = Arc<Mutex<Option<Result<Vec<f32>, String>>>>;

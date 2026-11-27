@@ -361,6 +361,14 @@ fn sections(app: &App) -> Vec<Section> {
         font_picker,
     );
     appearance.row(
+        translated(locale, "Emoji style"),
+        translated(
+            locale,
+            "Choose the emoji artwork style (powered by iamcal's emoji-data).",
+        ),
+        emoji_style_picker,
+    );
+    appearance.row(
         translated(locale, "Wallpaper"),
         Text::default(),
         move |ui, app| {
@@ -1205,6 +1213,45 @@ fn font_picker(ui: &mut egui::Ui, app: &mut App) {
             }
         });
     theme::reveal_focus(&response.response);
+}
+
+fn emoji_style_picker(ui: &mut egui::Ui, app: &mut App) {
+    use crate::emoji::StyleStatus;
+    use crate::settings::EmojiStyle;
+    let palette = app.palette;
+    let selected = app.settings.emoji_style;
+    let label = |style: EmojiStyle| match style {
+        EmojiStyle::System => crate::i18n::gettext(app.locale, style.label()).into_owned(),
+        _ => style.label().to_owned(),
+    };
+    ui.horizontal_wrapped(|ui| {
+        let response = egui::ComboBox::from_id_salt("emoji_style")
+            .selected_text(label(selected))
+            .width(200.0_f32.min(ui.available_width()))
+            .show_ui(ui, |ui| {
+                for style in EmojiStyle::ALL {
+                    if theme_option(ui, &palette, &label(style), selected == style) {
+                        app.actions.push(Action::SetEmojiStyle(style));
+                    }
+                }
+            });
+        theme::reveal_focus(&response.response);
+        match crate::emoji::style_status(selected) {
+            StyleStatus::Downloading => {
+                theme::spinner(ui, 14.0, palette.accent);
+                theme::text(
+                    ui,
+                    crate::i18n::gettext(app.locale, "Downloading emoji style…"),
+                    theme::regular(12.0),
+                    palette.secondary,
+                );
+            }
+            StyleStatus::Failed(error) => {
+                theme::text(ui, error, theme::regular(12.0), palette.danger);
+            }
+            StyleStatus::Ready => {}
+        }
+    });
 }
 
 fn language_picker(ui: &mut egui::Ui, app: &mut App) {

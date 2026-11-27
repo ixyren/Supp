@@ -4280,3 +4280,18 @@ msgstr[1] "{} grupos en común"
 
 msgid "Stop"
 msgstr "Detener"
+
+msgid "Emoji style"
+msgstr "Estilo de emojis"
+
+msgid "Choose the emoji artwork style (powered by iamcal's emoji-data)."
+msgstr "Elige el estilo visual de los emojis (gracias a emoji-data de iamcal)."
+
+msgid "Downloading emoji style…"
+msgstr "Descargando estilo de emojis…"
+
+msgid "Emoji styles by {iamcal}."
+msgstr "Estilos de emojis por {iamcal}."
+
+msgid "Mute sticker audio"
+msgstr "Silenciar audio del sticker"

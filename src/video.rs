@@ -554,6 +554,16 @@ fn sound_codec(path: &Path) -> Option<String> {
     })
 }
 
+/// Decodes the AAC audio track from an MP4/M4A container to mono 48 kHz samples,
+/// handling custom SLConfigDescriptor metadata that `rodio`'s symphonia reader refuses.
+pub(crate) fn decode_aac_track(path: &Path) -> Result<Vec<f32>, String> {
+    let track = AacTrack::open(path, Duration::ZERO)?;
+    let channels = rodio::Source::channels(&track).get();
+    let rate = rodio::Source::sample_rate(&track).get();
+    let interleaved: Vec<f32> = track.collect();
+    Ok(crate::voice::mono_at_rate(&interleaved, channels, rate))
+}
+
 struct Session {
     message: String,
     path: PathBuf,

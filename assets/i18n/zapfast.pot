@@ -3871,3 +3871,21 @@ msgstr ""
 #: src/a11y.rs:362
 msgid "not sent"
 msgstr ""
+
+msgid "Play sticker audio"
+msgstr ""
+
+msgid "Mute sticker audio"
+msgstr ""
+
+msgid "Emoji style"
+msgstr ""
+
+msgid "Choose the emoji artwork style (powered by iamcal's emoji-data)."
+msgstr ""
+
+msgid "Downloading emoji style…"
+msgstr ""
+
+msgid "Emoji styles by {iamcal}."
+msgstr ""

@@ -76,6 +76,50 @@ impl FontChoice {
     }
 }
 
+/// Visual artwork set used to draw emoji across the interface, sourced from
+/// `iamcal/emoji-data` when a custom style is chosen.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EmojiStyle {
+    /// Platform default emoji font (Segoe UI Emoji / Apple / Linux + Noto fallback).
+    #[default]
+    System,
+    Apple,
+    Google,
+    Twitter,
+    Facebook,
+}
+
+impl EmojiStyle {
+    pub const ALL: [EmojiStyle; 5] = [
+        Self::System,
+        Self::Apple,
+        Self::Google,
+        Self::Twitter,
+        Self::Facebook,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::System => "System",
+            Self::Apple => "Apple",
+            Self::Google => "Google",
+            Self::Twitter => "Twitter (Twemoji)",
+            Self::Facebook => "Facebook",
+        }
+    }
+
+    pub fn slug(self) -> Option<&'static str> {
+        match self {
+            Self::System => None,
+            Self::Apple => Some("apple"),
+            Self::Google => Some("google"),
+            Self::Twitter => Some("twitter"),
+            Self::Facebook => Some("facebook"),
+        }
+    }
+}
+
 /// Background colours offered by WhatsApp's wallpaper picker, after the
 /// active theme's own chat colour.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -424,6 +468,9 @@ pub struct Settings {
     pub(crate) messages_theme: bool,
     /// The interface's typeface.
     pub font: FontChoice,
+    /// Visual emoji artwork set (`system` uses the OS font + bundled Noto fallback).
+    #[serde(default)]
+    pub emoji_style: EmojiStyle,
     /// Windows and Linux: draw ZapFast's own title bar and window buttons
     /// instead of the desktop's. Off by default: on some Intel graphics
     /// drivers a frameless window shows a black band at the top and its
@@ -563,6 +610,7 @@ impl Default for Settings {
             theme: ThemeChoice::Dark,
             messages_theme: false,
             font: FontChoice::Inter,
+            emoji_style: EmojiStyle::System,
             custom_titlebar: cfg!(all(target_os = "windows", not(test))),
             interface_language: None,
             custom_theme: None,

@@ -255,6 +255,11 @@ impl AppDirs {
         self.cache.join("stickers")
     }
 
+    /// Cached emoji spritesheets and metadata from `iamcal/emoji-data`.
+    pub fn emoji_cache_dir(&self) -> PathBuf {
+        self.cache.join("emoji")
+    }
+
     /// Saved stickers keyed by content hash. These are user data, not cache.
     pub fn saved_sticker_dir(&self) -> PathBuf {
         self.state.join("stickers")

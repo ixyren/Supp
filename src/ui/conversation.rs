@@ -7086,6 +7086,8 @@ fn message_menu_labels(locale: crate::i18n::Locale) -> Vec<String> {
         gettext(locale, "Edit"),
         gettext(locale, "Delete for everyone"),
         gettext(locale, "Delete for me"),
+        gettext(locale, "Play sticker audio"),
+        gettext(locale, "Mute sticker audio"),
         gettext(locale, "Add to favorites"),
         gettext(locale, "Open in system player"),
         gettext(locale, "Open file"),
@@ -7603,6 +7605,32 @@ fn context_menu(
     });
     if delete_for_me.clicked() {
         actions.push(delete_for_me_action(chat, &message.id));
+    }
+    if let Content::Sticker {
+        audio: Some(_), ..
+    } = &message.content
+    {
+        let playing = matches!(
+            view.player.status(&message.id).state,
+            crate::audio::State::Playing | crate::audio::State::Loading
+        );
+        let (icon, label) = if playing {
+            (
+                Icon::VolumeX,
+                crate::i18n::gettext(view.locale, "Mute sticker audio"),
+            )
+        } else {
+            (
+                Icon::Volume2,
+                crate::i18n::gettext(view.locale, "Play sticker audio"),
+            )
+        };
+        if widgets::menu_item(ui, &palette, Some(icon), &label) {
+            actions.push(Action::ToggleStickerAudio {
+                chat: chat.clone(),
+                message: message.id.clone(),
+            });
+        }
     }
     if let Content::Sticker { media, .. } = &message.content
         && let Some(path) = &media.path
@@ -10240,20 +10268,22 @@ fn picture(
                     }
                 }
             }
-            let has_audio_badge =
+            let has_audio =
                 matches!(message.content, Content::Sticker { audio: Some(_), .. });
-            let on_audio_badge = has_audio_badge
-                && response
-                    .interact_pointer_pos()
-                    .is_some_and(|pos| sticker_audio_badge_rect(rect).contains(pos));
             if unreadable {
                 actions.push(unreadable_media(view, message, path));
             } else if response
                 .on_hover_cursor(egui::CursorIcon::PointingHand)
                 .clicked()
-                && !on_audio_badge
             {
-                actions.push(Action::PreviewSticker(path.clone()));
+                if has_audio {
+                    actions.push(Action::ToggleStickerAudio {
+                        chat: view.chat.id.clone(),
+                        message: message.id.clone(),
+                    });
+                } else {
+                    actions.push(Action::PreviewSticker(path.clone()));
+                }
             }
             return rect;
         }
@@ -10294,18 +10324,17 @@ fn picture(
                         .sense(Sense::click()),
                 );
                 let rect = response.rect;
-                let has_audio_badge =
+                let has_audio =
                     matches!(message.content, Content::Sticker { audio: Some(_), .. });
-                let on_audio_badge = has_audio_badge
-                    && response
-                        .interact_pointer_pos()
-                        .is_some_and(|pos| sticker_audio_badge_rect(rect).contains(pos));
                 if response
                     .on_hover_cursor(egui::CursorIcon::PointingHand)
                     .clicked()
-                    && !on_audio_badge
                 {
                     let action = match sticker {
+                        Some(_) if has_audio => Action::ToggleStickerAudio {
+                            chat: view.chat.id.clone(),
+                            message: message.id.clone(),
+                        },
                         Some(_) => Action::PreviewSticker(path.clone()),
                         None => match crate::image_preview::open_target(path, true) {
                             crate::image_preview::OpenTarget::Preview => Action::PreviewImage {
@@ -10479,15 +10508,15 @@ fn sticker_audio_badge_rect(rect: Rect) -> Rect {
     )
 }
 
-/// Draws the bottom-right speaker pill on an audio sticker and toggles
-/// download/playback when clicked.
+/// Draws the bottom-right speaker pill on an audio sticker and shows its
+/// playback/download status. Clicking anywhere on the sticker toggles audio.
 fn sticker_audio_button(
     ui: &mut egui::Ui,
     view: &View<'_>,
     message: &Message,
     audio: &Media,
     sticker: Rect,
-    actions: &mut Vec<Action>,
+    _actions: &mut Vec<Action>,
 ) {
     use crate::audio::State;
     if !ui.is_rect_visible(sticker) {
@@ -10498,29 +10527,25 @@ fn sticker_audio_button(
         .interact(
             badge,
             bubble_id(&view.chat.id, &message.id).with("sticker-audio"),
-            Sense::click(),
+            Sense::hover(),
         )
         .on_hover_cursor(egui::CursorIcon::PointingHand);
-    if response.clicked() {
-        actions.push(Action::ToggleStickerAudio {
-            chat: view.chat.id.clone(),
-            message: message.id.clone(),
-        });
-    }
-    let playing = matches!(view.player.status(&message.id).state, State::Playing { .. });
+    let state = view.player.status(&message.id).state;
+    let playing = matches!(state, State::Playing | State::Loading);
+    let loading = matches!(audio.state, MediaState::Downloading) || matches!(state, State::Loading);
     let fill = if playing {
         view.palette.accent
     } else if response.hovered() {
         Color32::from_black_alpha(190)
     } else {
-        Color32::from_black_alpha(150)
+        Color32::from_black_alpha(155)
     };
     ui.painter().circle_filled(badge.center(), 14.0, fill);
-    if matches!(audio.state, MediaState::Downloading) {
-        theme::paint_spinner(ui, badge, 15.0, view.palette.accent);
+    if loading {
+        theme::paint_spinner(ui, badge, 15.0, if playing { view.palette.on_accent } else { view.palette.accent });
     } else {
         let (icon, color) = if playing {
-            (Icon::Pause, view.palette.on_accent)
+            (Icon::Volume2, view.palette.on_accent)
         } else if matches!(audio.state, MediaState::Failed(_)) {
             (Icon::CircleAlert, view.palette.danger)
         } else {
@@ -10530,7 +10555,7 @@ fn sticker_audio_button(
     }
     let tooltip = match &audio.state {
         MediaState::Failed(error) => error.as_str().into(),
-        _ if playing => crate::i18n::gettext(view.locale, "Pause sticker audio"),
+        _ if playing => crate::i18n::gettext(view.locale, "Mute sticker audio"),
         _ => crate::i18n::gettext(view.locale, "Play sticker audio"),
     };
     response.on_hover_text(tooltip);
@@ -13613,9 +13638,14 @@ mod reaction_tests {
                 note: false,
             }),
             row(Content::Sticker {
-                media: media("image/webp", path, Idle),
+                media: media("image/webp", path.clone(), Idle),
                 animated: false,
                 audio: None,
+            }),
+            row(Content::Sticker {
+                media: media("image/webp", path.clone(), Idle),
+                animated: true,
+                audio: Some(media("audio/ogg", path, Idle)),
             }),
         ]
     }
@@ -13682,7 +13712,7 @@ mod reaction_tests {
             .map(String::as_str)
             .filter(|label| !labels.iter().any(|drawn| drawn == label))
             .collect();
-        assert_eq!(undrawn, ["Reply privately"]);
+        assert_eq!(undrawn, ["Reply privately", "Mute sticker audio"]);
         // Hover texts are not in the accessibility tree (React with any
         // emoji is, as its button's name).
         labels.extend(["React with any emoji".into(), "Remove your reaction".into()]);

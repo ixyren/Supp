@@ -12,7 +12,7 @@ ManifestDPIAware true
 
 !define APP_NAME "Supp"
 !define APP_EXE "supp.exe"
-!define APP_VERSION "2.0.1"
+!define APP_VERSION "2.0.2"
 !define APP_PUBLISHER "ixyren"
 !define APP_URL "https://github.com/ixyren/Supp"
 !define UNINSTALL_REG_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\Supp"
@@ -22,7 +22,7 @@ OutFile "..\..\dist\Supp_${APP_VERSION}_x64-setup.exe"
 InstallDir "$LOCALAPPDATA\Supp"
 InstallDirRegKey HKCU "${UNINSTALL_REG_KEY}" "InstallLocation"
 
-VIProductVersion "2.0.1.0"
+VIProductVersion "2.0.2.0"
 VIAddVersionKey "ProductName" "${APP_NAME}"
 VIAddVersionKey "CompanyName" "${APP_PUBLISHER}"
 VIAddVersionKey "FileDescription" "Instalador de ${APP_NAME} (Nativo en Rust)"
