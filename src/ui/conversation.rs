@@ -10250,7 +10250,17 @@ fn picture(
             let (rect, response) = ui.allocate_exact_size(size, Sense::click());
             let mut unreadable = false;
             if ui.is_rect_visible(rect) {
-                match animation::frame(ui, path, rect, view.animate) {
+                let clock = if matches!(message.content, Content::Sticker { audio: Some(_), .. }) {
+                    let status = view.player.status(&message.id);
+                    match status.state {
+                        crate::audio::State::Playing => Some(status.position),
+                        crate::audio::State::Loading => Some(Duration::ZERO),
+                        crate::audio::State::Idle | crate::audio::State::Paused => None,
+                    }
+                } else {
+                    None
+                };
+                match animation::frame_synced(ui, path, rect, view.animate, clock) {
                     animation::Frame::Ready(texture) => {
                         ui.painter().image(
                             texture.id(),

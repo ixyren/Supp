@@ -475,6 +475,8 @@ pub struct App {
     /// Whether palette changes are revealed. Off in tests, whose frames send
     /// no screenshots and would hold the old palette.
     pub reveal_theme_changes: bool,
+    /// When the active account last switched, for the cross-fade transition.
+    pub(crate) account_switch_at: Option<Instant>,
     zoom_applied: bool,
     /// The wallpaper image named in the settings, decoded off this thread.
     pub wallpaper_image: crate::wallpaper::CustomImage,
@@ -1583,6 +1585,7 @@ impl App {
             applied_dark: None,
             theme_transition: fastframe_theme::Transition::default(),
             reveal_theme_changes: !cfg!(test),
+            account_switch_at: None,
             zoom_applied: false,
             wallpaper_image: crate::wallpaper::CustomImage::default(),
             scroll_chats_to_top: false,
@@ -1966,6 +1969,7 @@ impl App {
         self.clear_account_ui();
         self.active = index;
         self.adding_account = false;
+        self.account_switch_at = (!cfg!(test)).then(Instant::now);
         if let Some(abandoned) = abandoned {
             self.remove_account(abandoned);
         }
@@ -2128,6 +2132,7 @@ impl App {
         self.accounts.push(account);
         self.active = self.accounts.len() - 1;
         self.adding_account = true;
+        self.account_switch_at = (!cfg!(test)).then(Instant::now);
         self.page = Page::Chats;
         self.restore_composer();
         self.save_roster();
@@ -2188,6 +2193,7 @@ impl App {
         }
         if removing_active {
             self.adding_account = false;
+            self.account_switch_at = (!cfg!(test)).then(Instant::now);
             self.restore_composer();
             self.page = Page::Chats;
             self.wallpaper_image.reload();
@@ -2768,6 +2774,7 @@ impl App {
             .ok();
         self.applied_dark = None;
         self.theme_transition = fastframe_theme::Transition::default();
+        self.account_switch_at = None;
         self.zoom_applied = false;
         self.window_hidden = false;
         self.paste_keys = PasteKeys::default();

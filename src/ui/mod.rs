@@ -92,6 +92,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         accounts::corner(app, ctx);
         dialogs::show(app, ctx);
         overlay::finish(ctx);
+        account_switch_fade(app, ctx);
         update::show(app, ctx);
         toasts(app, ctx);
         focus_ring(app, ctx);
@@ -123,6 +124,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     call::show(app, ctx);
     image_editor::show(app, ctx);
     overlay::finish(ctx);
+    account_switch_fade(app, ctx);
     drop_target(app, ctx);
     toasts(app, ctx);
     focus_ring(app, ctx);
@@ -677,6 +679,60 @@ pub fn composer_rect_id() -> egui::Id {
 /// Stable id of a toast's close button, used by interaction tests.
 pub fn toast_close_id(index: usize) -> egui::Id {
     egui::Id::new(("toast-close", index))
+}
+
+fn account_switch_fade(app: &mut App, ctx: &egui::Context) {
+    const DURATION: std::time::Duration = std::time::Duration::from_millis(240);
+    let Some(started) = app.account_switch_at else {
+        return;
+    };
+    if crate::motion::screen_reader_attached(ctx) {
+        app.account_switch_at = None;
+        return;
+    }
+    let t = (started.elapsed().as_secs_f32() / DURATION.as_secs_f32()).clamp(0.0, 1.0);
+    if t >= 1.0 {
+        app.account_switch_at = None;
+        return;
+    }
+    let eased = 1.0 - (1.0 - t).powi(3);
+    let alpha = (1.0 - eased) * 0.90;
+    let mut rect = ctx.content_rect();
+    if app.is_linked() && !narrow(ctx) {
+        let full_list =
+            app.sidebar_mode() == SidebarDisplayMode::Expanded || app.page == Page::Calls;
+        let mut list_width = chats::compact_width(ctx);
+        if full_list {
+            list_width += app.settings.sidebar_width;
+        }
+        let crowded = app.info_visible()
+            && rect.width() - list_width < pane::INFO_MIN + pane::INFO_CONVERSATION_MIN;
+        if !crowded {
+            rect.min.x = (rect.min.x + rail::WIDTH).min(rect.max.x);
+        }
+    }
+    let caption = theme::caption_footprint(ctx);
+    if caption.height > 0.0 {
+        rect.min.y = (rect.min.y + caption.height).min(rect.max.y);
+    }
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("account-switch-fade"),
+    ));
+    painter.rect_filled(rect, 0.0, app.palette.window.gamma_multiply(alpha));
+    let bar = egui::Rect::from_min_max(
+        rect.min,
+        egui::pos2(
+            (rect.min.x + 2.5 + 10.0 * (1.0 - eased)).min(rect.max.x),
+            rect.max.y,
+        ),
+    );
+    painter.rect_filled(
+        bar,
+        0.0,
+        app.palette.accent.gamma_multiply((1.0 - eased) * 0.65),
+    );
+    ctx.request_repaint();
 }
 
 fn toasts(app: &mut App, ctx: &egui::Context) {

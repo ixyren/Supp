@@ -132,7 +132,19 @@ pub enum Frame {
 /// A visible but paused animation returns its first frame without scheduling
 /// another repaint. This keeps animated media idle until playback is wanted.
 pub fn frame(ui: &egui::Ui, path: &Path, rect: egui::Rect, animate: bool) -> Frame {
-    frame_with_cache(ui, path, rect, animate, egui::Id::new("default"))
+    frame_inner(ui, path, rect, animate, egui::Id::new("default"), None)
+}
+
+/// Returns the current frame locked to an explicit external `clock` (such as
+/// an audio sticker's playback position) when `Some`, or free-running when `None`.
+pub fn frame_synced(
+    ui: &egui::Ui,
+    path: &Path,
+    rect: egui::Rect,
+    animate: bool,
+    clock: Option<Duration>,
+) -> Frame {
+    frame_inner(ui, path, rect, animate, egui::Id::new("default"), clock)
 }
 
 /// Returns an animation frame from a separate cache.
@@ -143,7 +155,7 @@ pub fn frame_with_cache(
     animate: bool,
     scope: egui::Id,
 ) -> Frame {
-    frame_inner(ui, path, rect, animate, scope)
+    frame_inner(ui, path, rect, animate, scope, None)
 }
 
 fn frame_inner(
@@ -152,6 +164,7 @@ fn frame_inner(
     rect: egui::Rect,
     animate: bool,
     scope: egui::Id,
+    clock: Option<Duration>,
 ) -> Frame {
     // ScrollArea still lays out clipped rows. They must neither start decoders
     // nor keep the window repainting while their pixels are off screen.
@@ -280,11 +293,14 @@ fn frame_inner(
                 }
                 return Frame::Ready(playing.frames[0].0.clone());
             }
-            if !playing.animating {
+            if let Some(at) = clock {
+                playing.animating = true;
+                playing.started = now.checked_sub(at).unwrap_or(now);
+            } else if !playing.animating {
                 playing.started = now;
                 playing.animating = true;
             }
-            let elapsed = now.duration_since(playing.started);
+            let elapsed = clock.unwrap_or_else(|| now.duration_since(playing.started));
             let mut position =
                 Duration::from_nanos((elapsed.as_nanos() % playing.total.as_nanos()) as u64);
             let mut chosen = 0;
@@ -2136,6 +2152,64 @@ mod tests {
             first_textures[1],
             "the sibling keeps its decoded frames instead of re-decoding"
         );
+    }
+
+    #[test]
+    fn frame_synced_follows_explicit_audio_clock_and_wraps() {
+        let ctx = egui::Context::default();
+        let path = PathBuf::from("synced-sticker.webp");
+        let frames: Vec<(TextureHandle, Duration)> = (0..3)
+            .map(|i| {
+                let image = ColorImage::new([4, 4], vec![egui::Color32::from_rgb(i as u8 * 80, 10, 10); 16]);
+                (
+                    ctx.load_texture(format!("synced-{i}"), image, TextureOptions::LINEAR),
+                    Duration::from_millis(100),
+                )
+            })
+            .collect();
+        let ids: Vec<_> = frames.iter().map(|(tex, _)| tex.id()).collect();
+        cache(&ctx).0.lock().expect("animation cache").entries.insert(
+            path.clone(),
+            Entry::Ready(Playing {
+                frames,
+                total: Duration::from_millis(300),
+                started: Instant::now() - Duration::from_millis(250),
+                last_drawn: Instant::now(),
+                animating: true,
+                played_in: 0,
+                complete: true,
+                upgrading: false,
+            }),
+        );
+
+        let check = |clock_ms: u64, expected_idx: usize| {
+            let mut chosen = None;
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(100.0, 100.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    let (rect, _) =
+                        ui.allocate_exact_size(egui::vec2(50.0, 50.0), egui::Sense::hover());
+                    if let Frame::Ready(tex) =
+                        frame_synced(ui, &path, rect, true, Some(Duration::from_millis(clock_ms)))
+                    {
+                        chosen = Some(tex.id());
+                    }
+                },
+            );
+            output.textures_delta.clear();
+            assert_eq!(chosen, Some(ids[expected_idx]), "clock {clock_ms}ms");
+        };
+
+        check(0, 0);
+        check(150, 1);
+        check(250, 2);
+        check(350, 0);
     }
 }
 
