@@ -161,6 +161,7 @@ pub fn bar(app: &mut App, ui: &mut egui::Ui) -> bool {
                             });
                     },
                 );
+                let send_label = crate::i18n::gettext(locale, "Send");
                 send = theme::circle_button(
                     ui,
                     Icon::Send,
@@ -168,7 +169,7 @@ pub fn bar(app: &mut App, ui: &mut egui::Ui) -> bool {
                     palette.accent,
                     palette.accent_hover,
                     palette.on_accent,
-                    "Send",
+                    send_label.as_ref(),
                 )
                 .tab_stop(Stop::Send)
                 .clicked();

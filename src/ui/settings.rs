@@ -345,7 +345,7 @@ fn sections(app: &App) -> Vec<Section> {
         .custom_themes
         .status(app.settings.custom_theme.as_deref());
     let detail = if let Some(status) = status {
-        theme::theme_status(status).to_owned().into()
+        translated(locale, theme::theme_status(status))
     } else if app.custom_themes.follows_omarchy() {
         translated(locale, "Follow system uses your Omarchy colours.")
     } else {
@@ -579,6 +579,20 @@ fn sections(app: &App) -> Vec<Section> {
         );
         let (title, description) = sound_text(locale, true);
         notifications.row(title, description, |ui, app| sound_control(ui, app, true));
+        notifications.row(
+            translated(locale, "Test notification"),
+            translated(
+                locale,
+                "Show a sample notification to preview its appearance.",
+            ),
+            |ui, app| {
+                let palette = app.palette;
+                let label = crate::i18n::gettext(app.locale, "Test notification");
+                if theme::soft_button(ui, &palette, Some(Icon::Bell), &label, false).clicked() {
+                    app.actions.push(Action::TestNotification);
+                }
+            },
+        );
     }
 
     let mut privacy = Section::new(translated(locale, "Privacy"));
@@ -1108,18 +1122,19 @@ fn theme_picker(ui: &mut egui::Ui, app: &mut App) {
             .settings
             .custom_theme
             .as_deref()
-            .map(fastframe_theme::display_name)
-            .unwrap_or_else(|| app.settings.theme.label());
+            .map(|name| std::borrow::Cow::Borrowed(fastframe_theme::display_name(name)))
+            .unwrap_or_else(|| crate::i18n::gettext(app.locale, app.settings.theme.label()));
         let response = egui::ComboBox::from_id_salt("appearance_theme")
             .selected_text(" ")
             .width(200.0_f32.min(ui.available_width()))
             .height(320.0)
             .show_ui(ui, |ui| {
                 for &choice in ThemeChoice::ALL {
+                    let label = crate::i18n::gettext(app.locale, choice.label());
                     if theme_option(
                         ui,
                         &palette,
-                        choice.label(),
+                        &label,
                         app.settings.custom_theme.is_none() && app.settings.theme == choice,
                     ) {
                         app.actions.push(Action::SetTheme(choice));
@@ -1144,7 +1159,7 @@ fn theme_picker(ui: &mut egui::Ui, app: &mut App) {
         let rect = response.response.rect;
         let text = widgets::line(
             ui,
-            selected,
+            &selected,
             theme::regular(14.0),
             palette.text,
             rect.width() - 36.0,
@@ -1161,7 +1176,7 @@ fn theme_picker(ui: &mut egui::Ui, app: &mut App) {
                 ui.is_enabled(),
                 crate::i18n::gettext(app.locale, "Theme"),
             );
-            info.current_text_value = Some(selected.to_owned());
+            info.current_text_value = Some(selected.as_ref().to_owned());
             info
         });
         if theme::soft_button(

@@ -480,20 +480,23 @@ fn identity(app: &mut App, ui: &mut egui::Ui, shown: &Shown, overlay: bool) {
                     );
                     field.inner
                 };
-                let first_field = name_field(ui, first, "contact-first", "First name");
-                let last_field = name_field(ui, last, "contact-last", "Surname");
+                let first_hint = crate::i18n::gettext(app.locale, "First name");
+                let last_hint = crate::i18n::gettext(app.locale, "Surname");
+                let first_field = name_field(ui, first, "contact-first", first_hint.as_ref());
+                let last_field = name_field(ui, last, "contact-last", last_hint.as_ref());
                 if ui.memory(|memory| memory.focused().is_none()) {
                     first_field.request_focus();
                 }
                 submit = (first_field.lost_focus() || last_field.lost_focus())
                     && ui.input(|input| input.key_pressed(egui::Key::Enter));
+                let save_label = crate::i18n::gettext(app.locale, "Save name (Enter)");
                 if theme::icon_button(
                     ui,
                     Icon::Check,
                     18.0,
                     palette.secondary,
                     palette.accent,
-                    "Save name (Enter)",
+                    save_label.as_ref(),
                 )
                 .tab_stop(Stop::InfoControl(NAME_CHECK_STOP))
                 .clicked()
@@ -534,7 +537,7 @@ fn identity(app: &mut App, ui: &mut egui::Ui, shown: &Shown, overlay: bool) {
         }
         if let Some(presence) = app.presence.get(id) {
             let status = if presence.online {
-                "online".to_owned()
+                crate::i18n::gettext(app.locale, "online").into_owned()
             } else if let Some(seen) = presence.last_seen {
                 crate::util::last_seen(app.locale, seen)
             } else {
@@ -548,9 +551,10 @@ fn identity(app: &mut App, ui: &mut egui::Ui, shown: &Shown, overlay: bool) {
             theme::text(
                 ui,
                 if until == 0 {
-                    "Muted".to_owned()
+                    crate::i18n::gettext(app.locale, "Muted").into_owned()
                 } else {
-                    format!("Muted until {}", crate::util::chat_stamp(app.locale, until))
+                    crate::i18n::gettext(app.locale, "Muted until {}")
+                        .replace("{}", &crate::util::chat_stamp(app.locale, until))
                 },
                 theme::regular(12.5),
                 palette.secondary,
@@ -805,11 +809,15 @@ fn identity(app: &mut App, ui: &mut egui::Ui, shown: &Shown, overlay: bool) {
 fn actions(app: &mut App, ui: &mut egui::Ui, shown: &Shown, mine: bool, editable: bool) {
     let palette = app.palette;
     let id = shown.id.as_str();
+    let message_label = crate::i18n::gettext(app.locale, "Message");
+    let rename_label = crate::i18n::gettext(app.locale, "Rename");
+    let add_contact_label = crate::i18n::gettext(app.locale, "Add to contacts");
+    let copy_number_label = crate::i18n::gettext(app.locale, "Copy number");
     let mut buttons: Vec<(Icon, &str, Vec<Action>)> = Vec::new();
     if !shown.group && !mine {
         buttons.push((
             Icon::MessageCircle,
-            "Message",
+            message_label.as_ref(),
             vec![
                 Action::StartChat {
                     id: id.to_owned(),
@@ -829,7 +837,11 @@ fn actions(app: &mut App, ui: &mut egui::Ui, shown: &Shown, mine: bool, editable
             .is_some_and(|full| !full.is_empty());
         buttons.push((
             Icon::User,
-            if known { "Rename" } else { "Add to contacts" },
+            if known {
+                rename_label.as_ref()
+            } else {
+                add_contact_label.as_ref()
+            },
             vec![Action::EditContact {
                 id: id.to_owned(),
                 name: shown.name.trim_start_matches('~').to_owned(),
@@ -839,7 +851,7 @@ fn actions(app: &mut App, ui: &mut egui::Ui, shown: &Shown, mine: bool, editable
     if let Some(phone) = &shown.phone {
         buttons.push((
             Icon::Copy,
-            "Copy number",
+            copy_number_label.as_ref(),
             vec![Action::CopyText(format!("+{phone}"))],
         ));
     }
@@ -946,7 +958,8 @@ fn members(app: &mut App, ui: &mut egui::Ui, shown: &Shown, window: f32, photo: 
     };
     theme::text(
         ui,
-        format!("Members ({})", members.len()),
+        crate::i18n::gettext(app.locale, "Members ({})")
+            .replace("{}", &members.len().to_string()),
         theme::medium(12.5),
         palette.secondary,
     );

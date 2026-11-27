@@ -42,6 +42,8 @@ pub mod motion;
 pub mod nav;
 pub mod new_group;
 pub mod notify;
+#[cfg(target_os = "windows")]
+pub(crate) mod notify_popup;
 pub mod opener;
 pub mod paths;
 pub mod privacy;

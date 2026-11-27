@@ -621,7 +621,7 @@ fn category_tabs(
                 }
                 if response
                     .on_hover_cursor(egui::CursorIcon::PointingHand)
-                    .on_hover_text(label)
+                    .on_hover_text(gettext(app.locale, label))
                     .clicked()
                 {
                     app.picker_search.clear();
@@ -652,6 +652,7 @@ fn emoji_grid(
     scroll_salt: &'static str,
     recent_label: &'static str,
 ) -> Option<String> {
+    let locale = app.locale;
     let newly_opened = app.picker_focus;
     let search_active =
         app.picker_focus || ui.memory(|memory| memory.has_focus(egui::Id::new(search_id)));
@@ -785,7 +786,7 @@ fn emoji_grid(
                     ui.painter().text(
                         pos2(rect.left() + 4.0, rect.bottom() - 8.0),
                         Align2::LEFT_BOTTOM,
-                        *label,
+                        gettext(locale, *label),
                         theme::semibold(12.5),
                         palette.secondary,
                     );
@@ -983,6 +984,7 @@ mod emoji_tests {
 // --- GIFs ---------------------------------------------------------------
 
 fn gif_tab(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
+    let locale = app.locale;
     // Ask for a key when none is set or GIPHY rejects it.
     let bad_key = app.gif_error.as_ref().is_some_and(|error| error.bad_key);
     if app.settings.effective_giphy_key().is_none() || bad_key {
@@ -993,11 +995,14 @@ fn gif_tab(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
         }
         theme::paragraph(
             ui,
-            if bad_key {
-                "This GIPHY API key was rejected. Create a free key at developers.giphy.com and paste it here. It is saved in your settings."
-            } else {
-                "GIF search needs a GIPHY API key. Create a free key at developers.giphy.com and paste it here. It is saved in your settings."
-            },
+            gettext(
+                locale,
+                if bad_key {
+                    "This GIPHY API key was rejected. Create a free key at developers.giphy.com and paste it here. It is saved in your settings."
+                } else {
+                    "GIF search needs a GIPHY API key. Create a free key at developers.giphy.com and paste it here. It is saved in your settings."
+                },
+            ),
             theme::regular(13.0),
             palette.text,
         );
@@ -1022,7 +1027,7 @@ fn gif_tab(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
                 let response = ui.add(
                     egui::TextEdit::singleline(&mut app.settings.giphy_key)
                         .hint_text(
-                            egui::RichText::new("GIPHY API key")
+                            egui::RichText::new(gettext(locale, "GIPHY API key").as_ref())
                                 .color(palette.dim)
                                 .font(theme::regular(13.5)),
                         )

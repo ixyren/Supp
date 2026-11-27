@@ -78,7 +78,6 @@ fn before_showing(cancelled: &mut tokio::sync::oneshot::Receiver<Stop>) -> Optio
 
 /// Cancellation is registered before delivery starts, so reading a chat while
 /// its notification is still being delivered cannot leave a stale notification.
-#[derive(Default)]
 pub struct Notifications {
     pending: PendingByAccountChat,
     /// Order of registration, so the oldest waiting notification is released first.
@@ -86,9 +85,23 @@ pub struct Notifications {
     /// When each limited chat last showed a notification. Shared so a failed
     /// delivery, which happens on the notification's own thread, can undo it.
     throttle: Throttle,
+    /// Active theme palette used by in-process desktop popup cards on Windows.
+    palette: crate::theme::Palette,
     /// What unit tests would have shown, recorded instead of shown on the
     /// desktop. Always empty outside tests.
     pub shown: Vec<Shown>,
+}
+
+impl Default for Notifications {
+    fn default() -> Self {
+        Self {
+            pending: Default::default(),
+            registered: 0,
+            throttle: Default::default(),
+            palette: crate::theme::Palette::dark(),
+            shown: Vec::new(),
+        }
+    }
 }
 
 /// A notification a unit test asked for.
@@ -238,8 +251,17 @@ impl Notifications {
         }
     }
 
+    /// Updates the theme palette used for Windows floating popup cards.
+    pub fn set_palette(&mut self, palette: crate::theme::Palette) {
+        self.palette = palette;
+    }
+
     pub fn clear_all(&mut self) {
         self.pending.clear();
+        #[cfg(target_os = "windows")]
+        if !cfg!(test) {
+            crate::notify_popup::close_all();
+        }
     }
 
     /// Shows a notification; platform delivery runs outside the interface thread.
@@ -252,7 +274,7 @@ impl Notifications {
         sound: NotificationSound,
         target: NotificationTarget,
         opened: Arc<Mutex<Vec<NotificationTarget>>>,
-        wake: impl Fn() + Send + 'static,
+        wake: impl Fn() + Send + Sync + 'static,
         limited: bool,
     ) {
         let key = match target.message {
@@ -275,36 +297,56 @@ impl Notifications {
             });
             return;
         }
-        let undo = Arc::new(Mutex::new(Some(failed)));
-        let undo_spawn = Arc::clone(&undo);
-        let spawned = std::thread::Builder::new()
-            .name("notification".into())
-            .spawn(move || {
-                let failed = move || {
-                    if let Some(undo) = undo_spawn.lock().unwrap_or_else(|p| p.into_inner()).take()
-                    {
-                        undo();
+        #[cfg(target_os = "windows")]
+        {
+            let _ = failed;
+            deliver_windows(
+                title,
+                body,
+                picture,
+                sound,
+                self.palette,
+                target,
+                opened,
+                wake,
+                cancelled,
+            );
+            return;
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let undo = Arc::new(Mutex::new(Some(failed)));
+            let undo_spawn = Arc::clone(&undo);
+            let spawned = std::thread::Builder::new()
+                .name("notification".into())
+                .spawn(move || {
+                    let failed = move || {
+                        if let Some(undo) =
+                            undo_spawn.lock().unwrap_or_else(|p| p.into_inner()).take()
+                        {
+                            undo();
+                        }
+                    };
+                    if !played_by_notification(&sound) {
+                        play_sound(sound.clone());
                     }
-                };
-                if !played_by_notification(&sound) {
-                    play_sound(sound.clone());
+                    deliver(
+                        &title,
+                        &body,
+                        picture.as_deref(),
+                        &sound,
+                        target,
+                        opened,
+                        wake,
+                        cancelled,
+                        failed,
+                    )
+                });
+            if let Err(error) = spawned {
+                log::debug!("no thread for a notification: {error}");
+                if let Some(undo) = undo.lock().unwrap_or_else(|p| p.into_inner()).take() {
+                    undo();
                 }
-                deliver(
-                    &title,
-                    &body,
-                    picture.as_deref(),
-                    &sound,
-                    target,
-                    opened,
-                    wake,
-                    cancelled,
-                    failed,
-                )
-            });
-        if let Err(error) = spawned {
-            log::debug!("no thread for a notification: {error}");
-            if let Some(undo) = undo.lock().unwrap_or_else(|p| p.into_inner()).take() {
-                undo();
             }
         }
     }
@@ -320,6 +362,7 @@ const SHUTTER_MENTION: &[u8] = include_bytes!("../assets/sounds/shutter-mention.
 /// macOS a sound the notification plays is silenced along with the banner by
 /// Do Not Disturb, Focus, and the app's notification settings, so Pidgin's
 /// sounds go with it when the application bundle carries them.
+#[cfg(any(not(target_os = "windows"), test))]
 fn sound_file(sound: &NotificationSound) -> Option<&'static str> {
     match sound {
         NotificationSound::Receive => Some("supp-receive.wav"),
@@ -330,10 +373,12 @@ fn sound_file(sound: &NotificationSound) -> Option<&'static str> {
     }
 }
 
+#[cfg(not(target_os = "windows"))]
 fn played_by_notification(sound: &NotificationSound) -> bool {
     sound_file(sound).is_some_and(fastframe_notifications::bundled_sound_exists)
 }
 
+#[cfg(any(not(target_os = "windows"), test))]
 fn native_sound(sound: &NotificationSound) -> fastframe_notifications::Sound {
     use fastframe_notifications::Sound;
     if *sound == NotificationSound::System {
@@ -348,7 +393,7 @@ fn native_sound(sound: &NotificationSound) -> fastframe_notifications::Sound {
 }
 
 /// Plays a notification sound on its own thread, for notifications and
-/// their preview in Settings. System sounds and silence play nothing here.
+/// their preview in Settings. Silence plays nothing here.
 pub fn play_sound(sound: NotificationSound) {
     let source: Box<dyn Fn() -> std::io::Result<Box<dyn ReadSeek>> + Send> = match sound {
         NotificationSound::Receive => Box::new(|| Ok(Box::new(std::io::Cursor::new(RECEIVE)))),
@@ -362,7 +407,19 @@ pub fn play_sound(sound: NotificationSound) {
                 &path,
             )?)))
         }),
-        NotificationSound::System | NotificationSound::None => return,
+        NotificationSound::System => {
+            #[cfg(target_os = "windows")]
+            if !cfg!(test) {
+                // SAFETY: Plays the standard Windows system notification chime.
+                unsafe {
+                    let _ = windows::Win32::System::Diagnostics::Debug::MessageBeep(
+                        windows::Win32::UI::WindowsAndMessaging::MB_OK,
+                    );
+                }
+            }
+            return;
+        }
+        NotificationSound::None => return,
     };
     let spawned = std::thread::Builder::new()
         .name("notification-sound".into())
@@ -429,7 +486,55 @@ pub fn lines(
     (title, body)
 }
 
+/// Shows a floating Telegram-style popup card on Windows and watches for
+/// chat-read cancellation without creating a Tokio runtime per notification.
+#[cfg(target_os = "windows")]
+#[expect(clippy::too_many_arguments)]
+fn deliver_windows(
+    title: String,
+    body: String,
+    picture: Option<PathBuf>,
+    sound: NotificationSound,
+    palette: crate::theme::Palette,
+    target: NotificationTarget,
+    opened: Arc<Mutex<Vec<NotificationTarget>>>,
+    wake: impl Fn() + Send + Sync + 'static,
+    mut cancelled: tokio::sync::oneshot::Receiver<Stop>,
+) {
+    let Some(may_wait) = before_showing(&mut cancelled) else {
+        return;
+    };
+    play_sound(sound);
+    let duration = if target.message.is_none() {
+        Duration::from_secs(30)
+    } else {
+        Duration::from_secs(6)
+    };
+    let id = crate::notify_popup::next_id();
+    crate::notify_popup::show(crate::notify_popup::PopupRequest {
+        id,
+        title,
+        body,
+        picture,
+        palette,
+        target,
+        opened,
+        wake: Arc::new(wake),
+        duration,
+    });
+    if may_wait {
+        let _ = std::thread::Builder::new()
+            .name("notification-wait".into())
+            .spawn(move || {
+                if let Ok(Stop::Close) = cancelled.blocking_recv() {
+                    crate::notify_popup::close(id);
+                }
+            });
+    }
+}
+
 /// The bundle identifier packaging/macos gives the app.
+#[cfg(any(not(target_os = "windows"), test))]
 const MACOS_BUNDLE_ID: &str = "me.paolino.fastsapp";
 
 /// The identity notifications are sent under. macOS refuses a client whose
@@ -437,6 +542,7 @@ const MACOS_BUNDLE_ID: &str = "me.paolino.fastsapp";
 /// mismatch leaves the app out of Notification Center: no banners, no sound,
 /// and no Dock badge. Elsewhere it is the app id the desktop entry and the
 /// Windows shortcuts use.
+#[cfg(any(not(target_os = "windows"), test))]
 fn notification_app_id() -> &'static str {
     if cfg!(target_os = "macos") {
         MACOS_BUNDLE_ID
@@ -447,6 +553,7 @@ fn notification_app_id() -> &'static str {
 
 /// Fastframe owns the platform adapters and one bounded native worker. This
 /// thread only keeps ZapFast's account-scoped cancellation and click routing.
+#[cfg(not(target_os = "windows"))]
 #[expect(clippy::too_many_arguments)]
 fn deliver(
     title: &str,

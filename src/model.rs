@@ -3421,6 +3421,8 @@ pub enum Action {
     SetProxy(String),
     /// Plays a notification sound once, as a preview.
     PreviewSound(crate::settings::NotificationSound),
+    /// Shows a sample desktop notification to preview its appearance.
+    TestNotification,
     ZoomBy(f32),
     ResetZoom,
     /// Requests a pairing code for a phone number.

@@ -4295,3 +4295,238 @@ msgstr "Estilos de emojis por {iamcal}."
 
 msgid "Mute sticker audio"
 msgstr "Silenciar audio del sticker"
+
+msgid "Activities"
+msgstr "Actividades"
+
+msgid "Add to contacts"
+msgstr "Añadir a contactos"
+
+msgid "Animals & Nature"
+msgstr "Animales y naturaleza"
+
+msgid "Close settings (Ctrl+,)"
+msgstr "Cerrar ajustes (Ctrl+,)"
+
+msgid "Contacts"
+msgstr "Contactos"
+
+msgid "Custom themes could not be loaded. Run supp reload-themes to try again."
+msgstr "No se pudieron cargar los temas personalizados. Ejecuta supp reload-themes para volver a intentarlo."
+
+msgid "Dark"
+msgstr "Oscuro"
+
+msgid "Default ({})"
+msgstr "Predeterminado ({})"
+
+msgid "Discard"
+msgstr "Descartar"
+
+msgid "Download card image"
+msgstr "Descargar imagen de la tarjeta"
+
+msgid "Downloading"
+msgstr "Descargando"
+
+msgid "Downloading card image"
+msgstr "Descargando imagen de la tarjeta"
+
+#, rust-format
+msgid "Failed: {error}"
+msgstr "Error: {error}"
+
+msgid "Flags"
+msgstr "Banderas"
+
+msgid "Follow system"
+msgstr "Seguir al sistema"
+
+msgid "Food & Drink"
+msgstr "Comida y bebida"
+
+msgid "Frequently Used"
+msgstr "Usados frecuentemente"
+
+msgid "GIF search needs a GIPHY API key. Create a free key at developers.giphy.com and paste it here. It is saved in your settings."
+msgstr "La búsqueda de GIFs necesita una clave de API de GIPHY. Crea una clave gratuita en developers.giphy.com y pégala aquí. Se guarda en tus ajustes."
+
+msgid "Group"
+msgstr "Grupo"
+
+msgid "Hide the chat list (Ctrl+B)"
+msgstr "Ocultar la lista de chats (Ctrl+B)"
+
+msgid "Hide the chat list (⌘B)"
+msgstr "Ocultar la lista de chats (⌘B)"
+
+msgid "Interactive message"
+msgstr "Mensaje interactivo"
+
+msgid "Light"
+msgstr "Claro"
+
+msgid "Loading local themes…"
+msgstr "Cargando temas locales…"
+
+msgid "Lock Supp"
+msgstr "Bloquear Supp"
+
+msgid "Lock a chat from its context menu to hide it here."
+msgstr "Bloquea un chat desde su menú contextual para ocultarlo aquí."
+
+msgid "Members ({})"
+msgstr "Miembros ({})"
+
+msgid "Messages"
+msgstr "Mensajes"
+
+msgid "More content in WhatsApp Web or on your phone"
+msgstr "Más contenido en WhatsApp Web o en tu teléfono"
+
+msgid "Mute all channels"
+msgstr "Silenciar todos los canales"
+
+msgid "Muted"
+msgstr "Silenciado"
+
+msgid "Muted until {}"
+msgstr "Silenciado hasta {}"
+
+msgid "New chat (⌘N)"
+msgstr "Nuevo chat (⌘N)"
+
+msgid "Newest message"
+msgstr "Mensaje más reciente"
+
+msgid "Next card"
+msgstr "Tarjeta siguiente"
+
+msgid "No locked chats"
+msgstr "No hay chats bloqueados"
+
+msgid "No results"
+msgstr "Sin resultados"
+
+msgid "No writable chats found"
+msgstr "No se encontraron chats donde escribir"
+
+msgid "Not sent"
+msgstr "No enviado"
+
+msgid "Nothing matches"
+msgstr "Sin coincidencias"
+
+msgid "Objects"
+msgstr "Objetos"
+
+msgid "Only 128 custom palettes can be listed. Keep fewer JSON files in the themes folder to see the rest."
+msgstr "Solo se pueden mostrar 128 paletas personalizadas. Mantén menos archivos JSON en la carpeta de temas para ver el resto."
+
+msgid "Open card image"
+msgstr "Abrir imagen de la tarjeta"
+
+msgid "People & Body"
+msgstr "Personas y cuerpo"
+
+#, rust-format
+msgid "Playback speed {label}"
+msgstr "Velocidad de reproducción {label}"
+
+msgid "Playback speed. Right-click for every speed."
+msgstr "Velocidad de reproducción. Clic derecho para ver todas."
+
+msgid "Preparing playback speed"
+msgstr "Preparando velocidad de reproducción"
+
+msgid "Previous card"
+msgstr "Tarjeta anterior"
+
+msgid "Record a voice message"
+msgstr "Grabar un mensaje de voz"
+
+msgid "Rename"
+msgstr "Cambiar nombre"
+
+msgid "Retry card image download"
+msgstr "Reintentar descarga de imagen de la tarjeta"
+
+msgid "Settings (Ctrl+,)"
+msgstr "Ajustes (Ctrl+,)"
+
+msgid "Show a sample notification to preview its appearance."
+msgstr "Muestra una notificación de ejemplo para previsualizar su aspecto."
+
+msgid "Show or hide Supp"
+msgstr "Mostrar u ocultar Supp"
+
+msgid "Show the chat list (Ctrl+B)"
+msgstr "Mostrar la lista de chats (Ctrl+B)"
+
+msgid "Smileys & Emotion"
+msgstr "Emoticonos y emociones"
+
+msgid "Symbols"
+msgstr "Símbolos"
+
+msgid "Test notification"
+msgstr "Probar notificación"
+
+msgid "The Omarchy palette could not be loaded. Keeping the last usable appearance. See the log for details."
+msgstr "No se pudo cargar la paleta de Omarchy. Se mantiene la última apariencia válida. Consulta el registro para más detalles."
+
+msgid "The selected theme is unavailable. Keeping the last usable appearance. See the log for details."
+msgstr "El tema seleccionado no está disponible. Se mantiene la última apariencia válida. Consulta el registro para más detalles."
+
+msgid "The themes folder could not be read. See the log for details."
+msgstr "No se pudo leer la carpeta de temas. Consulta el registro para más detalles."
+
+msgid "The themes folder has more than 512 entries. Keep fewer files there to list the custom palettes."
+msgstr "La carpeta de temas tiene más de 512 elementos. Deja menos archivos ahí para listar las paletas personalizadas."
+
+msgid "This GIPHY API key was rejected. Create a free key at developers.giphy.com and paste it here. It is saved in your settings."
+msgstr "Esta clave de API de GIPHY fue rechazada. Crea una clave gratuita en developers.giphy.com y pégala aquí. Se guarda en tus ajustes."
+
+msgid "This is how notifications appear on your desktop."
+msgstr "Así es como aparecen las notificaciones en tu escritorio."
+
+msgid "This message could not be sent, and Supp will not retry it. Send it again yourself."
+msgstr "No se pudo enviar este mensaje y Supp no volverá a intentarlo. Envíalo de nuevo tú mismo."
+
+msgid "Travel & Places"
+msgstr "Viajes y lugares"
+
+msgid "Try another name, number, or message text."
+msgstr "Prueba con otro nombre, número o texto del mensaje."
+
+msgid "Unmute all channels"
+msgstr "Activar notificaciones de todos los canales"
+
+#, rust-format
+msgid "Unsupported: {what}"
+msgstr "No compatible: {what}"
+
+msgid "Voice message speed"
+msgstr "Velocidad de mensajes de voz"
+
+msgid "You: "
+msgstr "Tú: "
+
+msgid "online"
+msgstr "en línea"
+
+msgid "typing…"
+msgstr "escribiendo…"
+
+#, rust-format
+msgid "{error}. Click to retry."
+msgstr "{error}. Haz clic para reintentar."
+
+#, rust-format
+msgid "{name} is typing…"
+msgstr "{name} está escribiendo…"
+
+#, rust-format
+msgid "{names} and {last} are typing…"
+msgstr "{names} y {last} están escribiendo…"
+

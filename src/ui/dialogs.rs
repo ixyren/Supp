@@ -675,12 +675,13 @@ fn forward(app: &mut App, ui: &mut egui::Ui, messages: &[String]) {
         return;
     }
     let width = ui.available_width();
+    let search_hint = crate::i18n::gettext(app.locale, "Search chats");
     let search = super::widgets::search_field(
         ui,
         &palette,
         egui::Id::new("forward-search"),
         &mut app.forward_search,
-        "Search chats",
+        search_hint.as_ref(),
         width,
     );
     if ui.memory(|memory| memory.focused().is_none()) {
@@ -793,7 +794,7 @@ fn forward(app: &mut App, ui: &mut egui::Ui, messages: &[String]) {
             if chats.is_empty() {
                 theme::text(
                     ui,
-                    "No writable chats found",
+                    crate::i18n::gettext(app.locale, "No writable chats found"),
                     theme::regular(13.5),
                     palette.secondary,
                 );

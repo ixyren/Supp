@@ -1327,7 +1327,7 @@ fn tray_action(event: fastframe_tray::Event, window_hidden: bool) -> Option<Acti
 ///
 /// "Lock ZapFast" is always in the menu, hidden without a password;
 /// `App::sync_tray` shows or hides it as the password is set or removed.
-fn tray_config(lockable: bool) -> fastframe_tray::Config {
+fn tray_config(lockable: bool, locale: crate::i18n::Locale) -> fastframe_tray::Config {
     use fastframe_tray::MenuItem;
     fastframe_tray::Config {
         id: "supp",
@@ -1338,10 +1338,17 @@ fn tray_config(lockable: bool) -> fastframe_tray::Config {
         // installed icon's name would draw instead.
         themed_icon: false,
         menu: vec![
-            MenuItem::action(TRAY_SHOW, "Show or hide Supp"),
-            MenuItem::action(TRAY_LOCK, "Lock Supp").visible(lockable),
+            MenuItem::action(
+                TRAY_SHOW,
+                crate::i18n::gettext(locale, "Show or hide Supp").into_owned(),
+            ),
+            MenuItem::action(
+                TRAY_LOCK,
+                crate::i18n::gettext(locale, "Lock Supp").into_owned(),
+            )
+            .visible(lockable),
             MenuItem::Separator,
-            MenuItem::action(TRAY_QUIT, "Quit"),
+            MenuItem::action(TRAY_QUIT, crate::i18n::gettext(locale, "Quit").into_owned()),
         ],
     }
 }
@@ -1820,6 +1827,7 @@ impl App {
         // A hand-edited speed snaps to a supported one, so a speed control
         // always shows the speed that plays.
         app.settings.voice_speed = app.player.set_speed(app.settings.voice_speed);
+        app.notifications.set_palette(app.palette);
         // The chip comes back with its account; a label is the window's.
         app.label_filter = app.remembered_label();
         app
@@ -2392,8 +2400,10 @@ impl App {
             return;
         }
         let waker = self.waker.clone();
-        self.tray =
-            fastframe_tray::Tray::spawn(tray_config(self.tray_lockable), move || waker.wake());
+        self.tray = fastframe_tray::Tray::spawn(
+            tray_config(self.tray_lockable, self.locale),
+            move || waker.wake(),
+        );
         // No session bus, say: asked again only if the setting is turned
         // back on, not on every frame.
         self.tray_failed = self.tray.is_none();
@@ -2531,6 +2541,10 @@ impl App {
                 self.actions.push(Action::ShowWindow);
                 continue;
             }
+            if target.chat.is_empty() {
+                self.actions.push(Action::ShowWindow);
+                continue;
+            }
             self.switch_account(&target.account);
             match target.message {
                 Some(message) => self.actions.push(Action::OpenMessage {
@@ -2623,6 +2637,7 @@ impl App {
             .or_else(|| self.cached_avatar(&sender));
         let waker = self.waker.clone();
         let sound = notification_sound(&self.settings, chat_sound, is_group, for_us);
+        self.notifications.set_palette(self.palette);
         self.notifications.show(
             title,
             body,
@@ -2658,6 +2673,7 @@ impl App {
         let (title, body) = crate::notify::locked_lines(self.locale);
         let sound = notification_sound(&self.settings, None, is_group, false);
         let waker = self.waker.clone();
+        self.notifications.set_palette(self.palette);
         self.notifications.show(
             title,
             body,
@@ -7364,6 +7380,7 @@ impl App {
         ctx.set_theme(preference);
         if self.applied_dark.is_none() || self.palette != palette {
             self.palette = palette;
+            self.notifications.set_palette(self.palette);
             crate::theme::apply(ctx, &self.palette);
             self.applied_dark = Some(dark);
         }
@@ -9884,6 +9901,28 @@ impl App {
                     .send(Command::PickNotificationSound { mention });
             }
             Action::PreviewSound(sound) => crate::notify::play_sound(sound),
+            Action::TestNotification => {
+                self.notifications.set_palette(self.palette);
+                let waker = self.waker.clone();
+                self.notifications.show(
+                    "Supp".to_owned(),
+                    crate::i18n::gettext(
+                        self.locale,
+                        "This is how notifications appear on your desktop.",
+                    )
+                    .into_owned(),
+                    None,
+                    self.settings.message_sound.clone(),
+                    crate::notify::NotificationTarget {
+                        account: self.account().id.clone(),
+                        chat: String::new(),
+                        message: Some("test-notification".to_owned()),
+                    },
+                    std::sync::Arc::clone(&self.notification_opens),
+                    move || waker.wake(),
+                    false,
+                );
+            }
             Action::PickDownloadFolder => self.backend.send(Command::PickDownloadFolder),
             Action::SetProfile { name, about } => {
                 self.backend.send(Command::SetProfile { name, about });
@@ -19011,7 +19050,7 @@ mod tests {
         ));
         for lockable in [false, true] {
             assert_eq!(
-                super::tray_config(lockable).menu,
+                super::tray_config(lockable, crate::i18n::Locale::English).menu,
                 [
                     fastframe_tray::MenuItem::action(super::TRAY_SHOW, "Show or hide Supp"),
                     fastframe_tray::MenuItem::action(super::TRAY_LOCK, "Lock Supp")

@@ -57,7 +57,7 @@ const SELECT_GUTTER: f32 = SELECT_BOX + 14.0;
 /// Footer label on an outgoing message that failed to send.
 const NOT_SENT: &str = "Not sent";
 const NOT_SENT_HINT: &str =
-    "This message could not be sent, and ZapFast will not retry it. Send it again yourself.";
+    "This message could not be sent, and Supp will not retry it. Send it again yourself.";
 
 pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let Some(chat) = app.current_chat().cloned() else {
@@ -1024,10 +1024,15 @@ fn subtitle(app: &App, chat: &Chat) -> (String, Color32) {
                             .replace("{names}", &rest.join(", "))
                             .replace("{last}", last),
                     ),
-                    (_, [one]) => Some(format!("{one} is typing…")),
-                    (_, [rest @ .., last]) => {
-                        Some(format!("{} and {last} are typing…", rest.join(", ")))
-                    }
+                    (_, [one]) => Some(
+                        crate::i18n::gettext(app.locale, "{name} is typing…")
+                            .replace("{name}", one),
+                    ),
+                    (_, [rest @ .., last]) => Some(
+                        crate::i18n::gettext(app.locale, "{names} and {last} are typing…")
+                            .replace("{names}", &rest.join(", "))
+                            .replace("{last}", last),
+                    ),
                 }
             };
             [ChatActivity::Typing, ChatActivity::RecordingAudio]
@@ -1038,7 +1043,7 @@ fn subtitle(app: &App, chat: &Chat) -> (String, Color32) {
         } else if activity == ChatActivity::RecordingAudio {
             crate::i18n::gettext(app.locale, "recording audio…").into_owned()
         } else {
-            "typing…".to_owned()
+            crate::i18n::gettext(app.locale, "typing…").into_owned()
         };
         return (text, palette.accent);
     }
@@ -1046,7 +1051,7 @@ fn subtitle(app: &App, chat: &Chat) -> (String, Color32) {
         let names = app.participant_names(chat);
         return (
             if names.is_empty() {
-                "Group".to_owned()
+                crate::i18n::gettext(app.locale, "Group").into_owned()
             } else {
                 names
             },
@@ -1055,7 +1060,10 @@ fn subtitle(app: &App, chat: &Chat) -> (String, Color32) {
     }
     if let Some(presence) = app.presence.get(&chat.id) {
         if presence.online {
-            return ("online".to_owned(), palette.accent);
+            return (
+                crate::i18n::gettext(app.locale, "online").into_owned(),
+                palette.accent,
+            );
         }
         if let Some(seen) = presence.last_seen {
             return (crate::util::last_seen(app.locale, seen), palette.secondary);
@@ -1630,9 +1638,11 @@ fn composer(app: &mut App, ui: &mut egui::Ui, chat: &Chat, review_send: Option<b
                                     );
                                 });
                                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                    let cancel_label =
+                                        crate::i18n::gettext(app.locale, "Cancel reply (Esc)");
                                     if theme::icon_button(
                                         ui, Icon::X, 16.0, palette.secondary, palette.text,
-                                        "Cancel reply (Esc)",
+                                        cancel_label.as_ref(),
                                     ).clicked() {
                                         app.actions.push(Action::CancelReply);
                                     }
@@ -1948,7 +1958,10 @@ fn composer(app: &mut App, ui: &mut egui::Ui, chat: &Chat, review_send: Option<b
                                     ui.ctx().request_discard("composer height changed");
                                 }
                                 let response = output.response.response.clone().tab_stop(Stop::Composer);
-                                ui.ctx().accesskit_node_builder(response.id, |node| node.set_label("Message"));
+                                let message_label = crate::i18n::gettext(app.locale, "Message");
+                                ui.ctx().accesskit_node_builder(response.id, |node| {
+                                    node.set_label(message_label.as_ref());
+                                });
                                 let keyboard_menu = response.has_focus()
                                     && ui.input_mut(|input| super::keys::take_exact(input, Modifiers::SHIFT, Key::F10));
                                 let menu_id = egui::Popup::default_response_id(&response);
@@ -2084,8 +2097,10 @@ fn composer(app: &mut App, ui: &mut egui::Ui, chat: &Chat, review_send: Option<b
                     (palette.surface, palette.surface_hover, palette.dim)
                 };
                 if review_send.is_none() {
+                let locale = app.locale;
                 last_line(ui, line, |ui| if !ready && app.editing.is_none() {
                     // An empty composer changes the send button to record.
+                    let record_label = crate::i18n::gettext(locale, "Record a voice message");
                     if theme::circle_button(
                         ui,
                         Icon::Mic,
@@ -2093,7 +2108,7 @@ fn composer(app: &mut App, ui: &mut egui::Ui, chat: &Chat, review_send: Option<b
                         fill,
                         hover,
                         palette.secondary,
-                        "Record a voice message",
+                        record_label.as_ref(),
                     )
                     .tab_stop(Stop::Send)
                     .clicked()
@@ -2106,7 +2121,16 @@ fn composer(app: &mut App, ui: &mut egui::Ui, chat: &Chat, review_send: Option<b
                     } else {
                         Icon::Send
                     };
-                    if theme::circle_button(ui, icon_kind, button_width, fill, hover, icon, "Send")
+                    let send_label = crate::i18n::gettext(locale, "Send");
+                    if theme::circle_button(
+                        ui,
+                        icon_kind,
+                        button_width,
+                        fill,
+                        hover,
+                        icon,
+                        send_label.as_ref(),
+                    )
                         .tab_stop(Stop::Send)
                         .clicked()
                     {
@@ -2521,7 +2545,7 @@ fn edit_strip(app: &mut App, ui: &mut egui::Ui) {
 fn reply_strip(app: &mut App, ui: &mut egui::Ui, quoted: &Message) {
     let palette = app.palette;
     let who = if quoted.from_me {
-        "You".to_owned()
+        crate::i18n::gettext(app.locale, "You").into_owned()
     } else {
         app.display_name_or(&quoted.sender, quoted.sender_name.as_deref())
     };
@@ -4440,6 +4464,7 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
             }
             .as_shape(button, CornerRadius::same(20)),
         );
+        let newest_label = crate::i18n::gettext(app.locale, "Newest message");
         if theme::circle_button(
             &mut child,
             Icon::ArrowDown,
@@ -4447,7 +4472,7 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
             palette.overlay,
             palette.surface_hover,
             palette.text,
-            "Newest message",
+            newest_label.as_ref(),
         )
         .clicked()
         {
@@ -5440,7 +5465,7 @@ fn speed_pill(
             egui::WidgetType::Button,
             ui.is_enabled(),
             active,
-            format!("Playback speed {label}"),
+            crate::i18n::gettext(view.locale, "Playback speed {label}").replace("{label}", &label),
         )
     });
     theme::reveal_focus(&response);
@@ -5687,7 +5712,7 @@ fn bubble_frame(
             // An album's footer is its last member's, marks included.
             let starred = view.starred.is_some_and(|ids| ids.contains(&last.id));
             let pinned = view.pins.is_some_and(|ids| ids.contains(&last.id));
-            let reserve = footer_width(ui, last, starred, pinned);
+            let reserve = footer_width(ui, last, starred, pinned, view.locale);
             let settled = album
                 .map(|_| CARD_WIDTH.min(cap))
                 .or_else(|| settled_width(ui, view, message, cap));
@@ -6150,7 +6175,7 @@ fn natural_text_width(ui: &egui::Ui, view: &View<'_>, message: &Message, cap: f3
     let last = laid.galley.rows.last().map_or(0.0, |row| row.row.size.x);
     let starred = view.starred.is_some_and(|ids| ids.contains(&message.id));
     let pinned = view.pins.is_some_and(|ids| ids.contains(&message.id));
-    let reserve = footer_width(ui, message, starred, pinned);
+    let reserve = footer_width(ui, message, starred, pinned, view.locale);
     Some(if last + 8.0 + reserve <= cap {
         widest.max(last + 8.0 + reserve)
     } else {
@@ -6223,7 +6248,8 @@ fn quote_block(
 ) {
     let palette = view.palette;
     let mine = quotes_me(view, quoted);
-    let who = quoted_sender_name(view, quoted, "You");
+    let you = crate::i18n::gettext(view.locale, "You");
+    let who = quoted_sender_name(view, quoted, you.as_ref());
     let summary = markup::plain(
         &quoted.summary_in(view.locale),
         &quote_mentions(view, quoted),
@@ -6519,12 +6545,22 @@ fn clock_width(ui: &egui::Ui, message: &Message) -> f32 {
 }
 
 /// Width of the message footer, including the room its marks take.
-fn footer_width(ui: &egui::Ui, message: &Message, starred: bool, pinned: bool) -> f32 {
+fn footer_width(
+    ui: &egui::Ui,
+    message: &Message,
+    starred: bool,
+    pinned: bool,
+    locale: crate::i18n::Locale,
+) -> f32 {
     let font = theme::regular(11.0);
     let time = clock_width(ui, message);
     let edited = if message.edited {
         ui.painter()
-            .layout_no_wrap("edited".to_owned(), font, Color32::WHITE)
+            .layout_no_wrap(
+                crate::i18n::gettext(locale, "edited").into_owned(),
+                font,
+                Color32::WHITE,
+            )
             .size()
             .x
             + 4.0
@@ -6533,7 +6569,11 @@ fn footer_width(ui: &egui::Ui, message: &Message, starred: bool, pinned: bool) -
     };
     let not_sent = if not_sent(message) {
         ui.painter()
-            .layout_no_wrap(NOT_SENT.to_owned(), theme::medium(11.0), Color32::WHITE)
+            .layout_no_wrap(
+                crate::i18n::gettext(locale, NOT_SENT).into_owned(),
+                theme::medium(11.0),
+                Color32::WHITE,
+            )
             .size()
             .x
             + 6.0
@@ -6623,8 +6663,11 @@ fn footer_over_picture(
         ui.painter()
             .layout_no_wrap(crate::util::clock(message.timestamp), font, Color32::WHITE);
     let failed = not_sent(message).then(|| {
-        ui.painter()
-            .layout_no_wrap(NOT_SENT.to_owned(), theme::medium(11.0), Color32::WHITE)
+        ui.painter().layout_no_wrap(
+            crate::i18n::gettext(view.locale, NOT_SENT).into_owned(),
+            theme::medium(11.0),
+            Color32::WHITE,
+        )
     });
     let tick_width = if message.from_me { 19.0 } else { 0.0 };
     let marks =
@@ -6679,10 +6722,11 @@ fn footer_over_picture(
             ui.id().with(("not-sent", &message.id)),
             Sense::hover(),
         );
+        let hint = crate::i18n::gettext(view.locale, NOT_SENT_HINT);
         response.widget_info(|| {
-            egui::WidgetInfo::labeled(egui::WidgetType::Label, true, NOT_SENT_HINT)
+            egui::WidgetInfo::labeled(egui::WidgetType::Label, true, hint.as_ref())
         });
-        response.on_hover_text(NOT_SENT_HINT);
+        response.on_hover_text(hint.as_ref());
     }
     if pinned {
         x -= FOOTER_MARK_SLOT;
@@ -6781,15 +6825,21 @@ fn footer(
         palette.secondary,
     );
     let edited = message.edited.then(|| {
-        ui.painter()
-            .layout_no_wrap("edited".to_owned(), font, palette.dim)
+        ui.painter().layout_no_wrap(
+            crate::i18n::gettext(view.locale, "edited").into_owned(),
+            font,
+            palette.dim,
+        )
     });
     // A red dot alone does not say what went wrong or what to do. The word
     // uses the text colour: the danger red on an outgoing bubble is too faint
     // to read, and the red icon beside it already carries the alarm.
     let failed = not_sent(message).then(|| {
-        ui.painter()
-            .layout_no_wrap(NOT_SENT.to_owned(), theme::medium(11.0), palette.text)
+        ui.painter().layout_no_wrap(
+            crate::i18n::gettext(view.locale, NOT_SENT).into_owned(),
+            theme::medium(11.0),
+            palette.text,
+        )
     });
     let tick_width = if message.from_me { 19.0 } else { 0.0 };
     let width = time.size().x
@@ -6864,10 +6914,11 @@ fn footer(
             ui.id().with(("not-sent", &message.id)),
             Sense::hover(),
         );
+        let hint = crate::i18n::gettext(view.locale, NOT_SENT_HINT);
         response.widget_info(|| {
-            egui::WidgetInfo::labeled(egui::WidgetType::Label, true, NOT_SENT_HINT)
+            egui::WidgetInfo::labeled(egui::WidgetType::Label, true, hint.as_ref())
         });
-        response.on_hover_text(NOT_SENT_HINT);
+        response.on_hover_text(hint.as_ref());
     }
     if starred {
         x -= FOOTER_MARK_SLOT;
@@ -7539,7 +7590,7 @@ fn context_menu(
             }
             let clicked = response.clicked();
             if let Some(hint) = entry.hint {
-                response.on_hover_text(hint.shown());
+                response.on_hover_text(hint.said(view.locale));
             }
             if clicked && let Some(action) = entry.action {
                 actions.push(action);
@@ -8249,8 +8300,9 @@ fn content(
                     return None;
                 }
             }
+            let fallback = crate::i18n::gettext(view.locale, "Interactive message");
             let body = if card.body.is_empty() {
-                "Interactive message"
+                fallback.as_ref()
             } else {
                 &card.body
             };
@@ -8653,7 +8705,7 @@ fn content(
                 |ui| {
                     theme::text(
                         ui,
-                        "This message was deleted",
+                        crate::i18n::gettext(view.locale, "This message was deleted"),
                         theme::regular(13.5),
                         palette.secondary,
                     );
@@ -8744,7 +8796,8 @@ fn content(
                 |ui| {
                     theme::text(
                         ui,
-                        format!("Unsupported: {what}"),
+                        crate::i18n::gettext(view.locale, "Unsupported: {what}")
+                            .replace("{what}", what),
                         theme::regular(13.5),
                         palette.secondary,
                     );
@@ -8881,6 +8934,7 @@ fn carousel(
                     let arrow = carousel_arrow(
                         ui,
                         &view.palette,
+                        view.locale,
                         rect,
                         id.with(("carousel-arrow", direction)),
                         direction < 0,
@@ -8932,17 +8986,21 @@ fn carousel_row(message: &Message, index: usize, card: &crate::model::Interactiv
 fn carousel_arrow(
     ui: &mut egui::Ui,
     palette: &Palette,
+    locale: crate::i18n::Locale,
     rect: Rect,
     id: egui::Id,
     previous: bool,
 ) -> egui::Response {
-    let label = if previous {
-        "Previous card"
-    } else {
-        "Next card"
-    };
+    let label = crate::i18n::gettext(
+        locale,
+        if previous {
+            "Previous card"
+        } else {
+            "Next card"
+        },
+    );
     let response = ui.interact(rect, id, Sense::click());
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label.as_ref()));
     ui.ctx().data_mut(|data| data.insert_temp(id, rect));
     theme::reveal_focus(&response);
     if ui.is_rect_visible(rect) {
@@ -9121,16 +9179,23 @@ fn album_tile(
 ) -> Option<Rect> {
     let media = message.content.media()?;
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-    let kind = if matches!(message.content, Content::Image { .. }) {
-        "Photo"
-    } else {
-        "Video"
-    };
+    let kind = crate::i18n::gettext(
+        view.locale,
+        if matches!(message.content, Content::Image { .. }) {
+            "Photo"
+        } else {
+            "Video"
+        },
+    );
     let state = match (&media.path, &media.state) {
-        (Some(_), _) => "Open".to_owned(),
-        (None, MediaState::Downloading) => "Downloading".to_owned(),
-        (None, MediaState::Failed(error)) => format!("Failed: {error}"),
-        (None, MediaState::Idle) => "Download".to_owned(),
+        (Some(_), _) => crate::i18n::gettext(view.locale, "Open").into_owned(),
+        (None, MediaState::Downloading) => {
+            crate::i18n::gettext(view.locale, "Downloading").into_owned()
+        }
+        (None, MediaState::Failed(error)) => {
+            crate::i18n::gettext(view.locale, "Failed: {error}").replace("{error}", error)
+        }
+        (None, MediaState::Idle) => crate::i18n::gettext(view.locale, "Download").into_owned(),
     };
     response.widget_info(|| {
         egui::WidgetInfo::labeled(egui::WidgetType::Button, true, format!("{kind}, {state}"))
@@ -9288,13 +9353,16 @@ fn carousel_picture(
     let Some(media) = &card.image else { return };
     let size = vec2(width, width * 0.56);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-    let label = match (&media.path, &media.state) {
-        (Some(_), _) => "Open card image",
-        (None, MediaState::Failed(_)) => "Retry card image download",
-        (None, MediaState::Downloading) => "Downloading card image",
-        (None, MediaState::Idle) => "Download card image",
-    };
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+    let label = crate::i18n::gettext(
+        view.locale,
+        match (&media.path, &media.state) {
+            (Some(_), _) => "Open card image",
+            (None, MediaState::Failed(_)) => "Retry card image download",
+            (None, MediaState::Downloading) => "Downloading card image",
+            (None, MediaState::Idle) => "Download card image",
+        },
+    );
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label.as_ref()));
     // Tab can land on a card scrolled out of the carousel's viewport.
     theme::reveal_focus(&response);
     let visible = ui.is_rect_visible(rect);
@@ -9495,6 +9563,7 @@ impl ButtonBlocker {
     ];
 
     /// As the bubble's hover text shows it.
+    #[cfg(test)]
     fn shown(self) -> &'static str {
         match self {
             Self::Sending => "Sending reply…",
@@ -9677,7 +9746,7 @@ fn interactive_buttons(
             );
         }
         if !enabled {
-            let reason = interactive_reason(view, message, button).shown();
+            let reason = interactive_reason(view, message, button).said(view.locale);
             response.on_hover_text(format!("{}\n{reason}", button.label));
         } else if let Some(url) = &button.url {
             if response
@@ -9711,7 +9780,7 @@ fn interactive_buttons(
         ui.add_space(6.0);
         widgets::rich_text(
             ui,
-            "More content in WhatsApp Web or on your phone",
+            &crate::i18n::gettext(view.locale, "More content in WhatsApp Web or on your phone"),
             theme::regular(12.0),
             palette.secondary,
         );
@@ -11493,6 +11562,7 @@ fn voice_player(
             match (&media.path, &media.state) {
                 (None, MediaState::Downloading) => waiting(ui, download_fraction(view, message)),
                 (None, _) => {
+                    let download_label = crate::i18n::gettext(view.locale, "Download");
                     if theme::circle_button(
                         ui,
                         Icon::Download,
@@ -11500,7 +11570,7 @@ fn voice_player(
                         fill,
                         hover,
                         palette.accent,
-                        "Download",
+                        download_label.as_ref(),
                     )
                     .clicked()
                     {
@@ -11515,11 +11585,12 @@ fn voice_player(
                 (Some(path), _) => match status.state {
                     State::Loading => waiting(ui, None),
                     State::Playing | State::Paused | State::Idle => {
-                        let (icon, tooltip) = if status.state == State::Playing {
+                        let (icon, key) = if status.state == State::Playing {
                             (Icon::Pause, "Pause")
                         } else {
                             (Icon::Play, "Play")
                         };
+                        let tooltip = crate::i18n::gettext(view.locale, key);
                         if theme::circle_button(
                             ui,
                             icon,
@@ -11527,7 +11598,7 @@ fn voice_player(
                             fill,
                             hover,
                             palette.accent,
-                            tooltip,
+                            tooltip.as_ref(),
                         )
                         .clicked()
                         {
@@ -11632,9 +11703,11 @@ fn voice_player(
                         .unwrap_or_else(|| crate::util::bytes(media.size)),
                 };
                 let (text, font) = match &media.state {
-                    MediaState::Failed(error) => {
-                        (format!("{error}. Click to retry."), theme::regular(11.5))
-                    }
+                    MediaState::Failed(error) => (
+                        crate::i18n::gettext(view.locale, "{error}. Click to retry.")
+                            .replace("{error}", error),
+                        theme::regular(11.5),
+                    ),
                     _ => (
                         shown,
                         theme::tabular(fastframe_fonts::Weight::Regular, 11.5),
@@ -11710,11 +11783,14 @@ fn voice_player(
                         crate::audio::next_cycled_speed(speed),
                     ));
                 }
-                response.on_hover_text(if preparing {
-                    "Preparing playback speed"
-                } else {
-                    "Playback speed. Right-click for every speed."
-                });
+                response.on_hover_text(crate::i18n::gettext(
+                    view.locale,
+                    if preparing {
+                        "Preparing playback speed"
+                    } else {
+                        "Playback speed. Right-click for every speed."
+                    },
+                ));
             }
         },
     );
@@ -11768,6 +11844,7 @@ fn recording_strip(app: &mut App, ui: &mut egui::Ui) {
         egui::Layout::left_to_right(egui::Align::Center),
         |ui| {
             ui.spacing_mut().item_spacing.x = 10.0;
+            let discard_label = crate::i18n::gettext(app.locale, "Discard");
             if theme::circle_button(
                 ui,
                 Icon::Trash,
@@ -11775,7 +11852,7 @@ fn recording_strip(app: &mut App, ui: &mut egui::Ui) {
                 palette.surface,
                 palette.surface_hover,
                 palette.secondary,
-                "Discard",
+                discard_label.as_ref(),
             )
             .clicked()
             {
@@ -11815,6 +11892,7 @@ fn recording_strip(app: &mut App, ui: &mut egui::Ui) {
                     palette.accent,
                 );
             }
+            let send_label = crate::i18n::gettext(app.locale, "Send");
             if theme::circle_button(
                 ui,
                 Icon::Send,
@@ -11822,7 +11900,7 @@ fn recording_strip(app: &mut App, ui: &mut egui::Ui) {
                 palette.accent,
                 palette.accent_hover,
                 palette.on_accent,
-                "Send",
+                send_label.as_ref(),
             )
             .clicked()
             {
@@ -12877,10 +12955,11 @@ mod tests {
             },
             |ui| {
                 let message = crate::archive::tests::message("1@s.whatsapp.net", "m1", 0, false);
+                let locale = crate::i18n::Locale::English;
                 clock = clock_width(ui, &message);
-                plain = footer_width(ui, &message, false, false);
-                pinned = footer_width(ui, &message, false, true);
-                both = footer_width(ui, &message, true, true);
+                plain = footer_width(ui, &message, false, false, locale);
+                pinned = footer_width(ui, &message, false, true, locale);
+                both = footer_width(ui, &message, true, true, locale);
             },
         );
         output.textures_delta.clear();
@@ -12962,10 +13041,11 @@ mod tests {
             |ui| {
                 let from_them = crate::archive::tests::message("1@s.whatsapp.net", "m1", 0, false);
                 let from_me = crate::archive::tests::message("1@s.whatsapp.net", "m1", 0, true);
+                let locale = crate::i18n::Locale::English;
                 clock = clock_width(ui, &from_them);
-                incoming = footer_width(ui, &from_them, false, false);
-                starred = footer_width(ui, &from_them, true, false);
-                own = footer_width(ui, &from_me, false, false);
+                incoming = footer_width(ui, &from_them, false, false, locale);
+                starred = footer_width(ui, &from_them, true, false, locale);
+                own = footer_width(ui, &from_me, false, false, locale);
             },
         );
         output.textures_delta.clear();
@@ -13140,13 +13220,14 @@ mod tests {
             thumbnail: None,
         };
         let mut widths = Vec::new();
+        let locale = crate::i18n::Locale::English;
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            widths.push(footer_width(ui, &message, false, false));
+            widths.push(footer_width(ui, &message, false, false, locale));
             message.status = Delivery::Failed;
-            widths.push(footer_width(ui, &message, false, false));
+            widths.push(footer_width(ui, &message, false, false, locale));
             // Only our own messages can fail to send.
             message.from_me = false;
-            widths.push(footer_width(ui, &message, false, false) + 19.0);
+            widths.push(footer_width(ui, &message, false, false, locale) + 19.0);
         });
         output.textures_delta.clear();
         assert!(widths[1] > widths[0] + 30.0, "{widths:?}");

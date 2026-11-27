@@ -388,13 +388,17 @@ fn header_button_row(app: &mut App, ui: &mut egui::Ui, buttons: &[HeaderButton],
     for button in buttons {
         match button {
             HeaderButton::NewChat => {
+                let tooltip = crate::i18n::gettext(
+                    app.locale,
+                    if macos { "New chat (⌘N)" } else { "New chat" },
+                );
                 if theme::icon_button(
                     ui,
                     Icon::SquarePen,
                     HEADER_ICON,
                     palette.secondary,
                     palette.text,
-                    if macos { "New chat (⌘N)" } else { "New chat" },
+                    tooltip.as_ref(),
                 )
                 .tab_stop(Stop::NewChat)
                 .clicked()
@@ -418,17 +422,21 @@ fn header_button_row(app: &mut App, ui: &mut egui::Ui, buttons: &[HeaderButton],
                 }
             }
             HeaderButton::HideList => {
+                let tooltip = crate::i18n::gettext(
+                    app.locale,
+                    if macos {
+                        "Hide the chat list (⌘B)"
+                    } else {
+                        "Hide the chat list (Ctrl+B)"
+                    },
+                );
                 if theme::icon_button(
                     ui,
                     Icon::PanelLeft,
                     HEADER_ICON,
                     palette.secondary,
                     palette.text,
-                    if macos {
-                        "Hide the chat list (⌘B)"
-                    } else {
-                        "Hide the chat list (Ctrl+B)"
-                    },
+                    tooltip.as_ref(),
                 )
                 .tab_stop(Stop::Sidebar)
                 .clicked()
@@ -645,12 +653,13 @@ fn filter_chips(app: &mut App, ui: &mut egui::Ui) {
                         .filter(|chat| chat.is_channel())
                         .all(|chat| chat.muted(now));
                     chip.context_menu(|ui| {
-                        let (icon, label) = if all_muted {
+                        let (icon, key) = if all_muted {
                             (Icon::Bell, "Unmute all channels")
                         } else {
                             (Icon::BellOff, "Mute all channels")
                         };
-                        if widgets::menu_item(ui, &palette, Some(icon), label) {
+                        let label = crate::i18n::gettext(app.locale, key);
+                        if widgets::menu_item(ui, &palette, Some(icon), &label) {
                             app.actions.push(Action::MuteAllChannels(!all_muted));
                             ui.close();
                         }
@@ -1136,8 +1145,11 @@ fn locked_list(app: &mut App, ui: &mut egui::Ui) {
             ui,
             &palette,
             Icon::LockOpen,
-            "No locked chats",
-            "Lock a chat from its context menu to hide it here.",
+            &crate::i18n::gettext(app.locale, "No locked chats"),
+            &crate::i18n::gettext(
+                app.locale,
+                "Lock a chat from its context menu to hide it here.",
+            ),
         );
         return;
     }
@@ -1209,8 +1221,8 @@ fn results(app: &mut App, ui: &mut egui::Ui) {
             ui,
             &palette,
             Icon::Search,
-            "No results",
-            "Try another name, number, or message text.",
+            &crate::i18n::gettext(app.locale, "No results"),
+            &crate::i18n::gettext(app.locale, "Try another name, number, or message text."),
         );
         return;
     }
@@ -1220,7 +1232,7 @@ fn results(app: &mut App, ui: &mut egui::Ui) {
         .auto_shrink([false, false])
         .show(ui, |ui| {
             if !chats.is_empty() {
-                section(ui, &palette, "Chats");
+                section(ui, &palette, &crate::i18n::gettext(app.locale, "Chats"));
                 for chat in &chats {
                     let reveal = ui.is_enabled()
                         && app.scroll_chat_into_view.as_deref() == Some(chat.id.as_str());
@@ -1264,13 +1276,13 @@ fn results(app: &mut App, ui: &mut egui::Ui) {
                 }
             }
             if !hits.is_empty() {
-                section(ui, &palette, "Messages");
+                section(ui, &palette, &crate::i18n::gettext(app.locale, "Messages"));
                 for hit in &hits {
                     ui.push_id(("hit", &hit.chat, &hit.id), |ui| hit_row(app, ui, hit));
                 }
             }
             if !contacts.is_empty() || offer_self {
-                section(ui, &palette, "Contacts");
+                section(ui, &palette, &crate::i18n::gettext(app.locale, "Contacts"));
                 if offer_self {
                     ui.push_id("self", |ui| self_row(app, ui));
                 }
@@ -1355,7 +1367,7 @@ fn hit_row(app: &mut App, ui: &mut egui::Ui, hit: &Message) {
         if hit.from_me {
             let who = widgets::line(
                 ui,
-                "You: ",
+                &crate::i18n::gettext(app.locale, "You: "),
                 theme::regular(13.0),
                 palette.dim,
                 (right - x) * 0.5,
@@ -1663,11 +1675,12 @@ fn row(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> egui::Response {
                 crate::i18n::gettext(app.locale, "{name} is recording audio…")
                     .replace("{name}", typing[0].1.trim_start_matches('~'))
             } else if chat.is_group() {
-                format!("{} is typing…", typing[0].1.trim_start_matches('~'))
+                crate::i18n::gettext(app.locale, "{name} is typing…")
+                    .replace("{name}", typing[0].1.trim_start_matches('~'))
             } else if recording {
                 crate::i18n::gettext(app.locale, "recording audio…").into_owned()
             } else {
-                "typing…".to_owned()
+                crate::i18n::gettext(app.locale, "typing…").into_owned()
             };
             widgets::line(
                 ui,
@@ -1776,15 +1789,15 @@ fn row(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> egui::Response {
     let menu_width = widgets::menu_width(
         ui,
         &[
-            "Mark as read",
-            "Mark as unread",
-            "Pin to top",
+            &crate::i18n::gettext(app.locale, "Mark as read"),
+            &crate::i18n::gettext(app.locale, "Mark as unread"),
+            &crate::i18n::gettext(app.locale, "Pin to top"),
             favorite_label.as_ref(),
-            "Unarchive",
+            &crate::i18n::gettext(app.locale, "Unarchive"),
             &crate::i18n::gettext(app.locale, "Leave group"),
             &crate::i18n::gettext(app.locale, "Leave channel"),
-            "Unlock chat",
-            "Copy number",
+            &crate::i18n::gettext(app.locale, "Unlock chat"),
+            &crate::i18n::gettext(app.locale, "Copy number"),
             &crate::i18n::gettext(app.locale, "Clear chat"),
             &crate::i18n::gettext(app.locale, "Delete chat"),
             &super::blocking::label(app, &chat.id),
@@ -1797,8 +1810,8 @@ fn row(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> egui::Response {
             ui,
             &[
                 &crate::i18n::gettext(app.locale, "Mute"),
-                "Notification sound",
-                "Voice message speed",
+                &crate::i18n::gettext(app.locale, "Notification sound"),
+                &crate::i18n::gettext(app.locale, "Voice message speed"),
                 &crate::i18n::gettext(app.locale, "Labels"),
             ],
             true,
@@ -2389,10 +2402,8 @@ fn mute_menu(app: &mut App, ui: &mut egui::Ui, palette: &Palette, chat: &Chat, n
 fn voice_speed_menu(app: &mut App, ui: &mut egui::Ui, palette: &Palette, chat: &Chat) {
     let options: Vec<(Option<f32>, String)> = std::iter::once((
         None,
-        format!(
-            "Default ({})",
-            crate::audio::speed_label(app.settings.voice_speed)
-        ),
+        crate::i18n::gettext(app.locale, "Default ({})")
+            .replace("{}", &crate::audio::speed_label(app.settings.voice_speed)),
     ))
     .chain(
         crate::audio::SPEEDS
@@ -2401,11 +2412,12 @@ fn voice_speed_menu(app: &mut App, ui: &mut egui::Ui, palette: &Palette, chat: &
     )
     .collect();
     let items: Vec<&str> = options.iter().map(|(_, label)| label.as_str()).collect();
+    let menu_label = crate::i18n::gettext(app.locale, "Voice message speed");
     widgets::submenu(
         ui,
         palette,
         Icon::Play,
-        "Voice message speed",
+        &menu_label,
         &items,
         |ui| {
             for (speed, label) in &options {
