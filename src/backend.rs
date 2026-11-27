@@ -1198,6 +1198,8 @@ pub enum Command {
     },
     /// Ask GitHub whether a newer release exists.
     CheckForUpdates,
+    /// Ask GitHub immediately and report the outcome to the UI.
+    CheckForUpdatesNow,
     InspectUpdate,
     DownloadUpdate {
         release: crate::updates::Release,
@@ -1616,6 +1618,8 @@ pub enum Event {
         version: String,
         url: String,
     },
+    /// Outcome of a user-initiated check against GitHub Releases.
+    UpdateCheckResult(Result<Option<crate::updates::Release>, String>),
     UpdateSupport(Result<crate::updates::Installation, String>),
     UpdateProgress {
         received: u64,

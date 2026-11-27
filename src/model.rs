@@ -3334,6 +3334,7 @@ pub enum Action {
     /// Updates chat-list search text.
     Search(String),
     ShowUpdate,
+    CheckForUpdatesNow,
     CloseUpdate,
     DownloadUpdate,
     InstallUpdate,

@@ -8626,6 +8626,17 @@ impl Worker {
                     }
                 });
             }
+            Command::CheckForUpdatesNow => {
+                let events = self.events.clone();
+                let waker = self.waker.clone();
+                tokio::task::spawn_blocking(move || {
+                    let result = crate::updates::updater()
+                        .and_then(|updater| updater.check())
+                        .map_err(|error| format!("{error:#}"));
+                    let _ = events.send(Event::UpdateCheckResult(result));
+                    waker.wake();
+                });
+            }
             Command::GifResults {
                 query,
                 offset,

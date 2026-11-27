@@ -834,6 +834,8 @@ pub struct App {
     pub update_download: crate::updates::DownloadState,
     pub update_support: Option<Result<crate::updates::Installation, String>>,
     update_inspecting: bool,
+    pub update_checking: bool,
+    pub update_check_message: Option<String>,
     pub update_arguments: Vec<String>,
     /// Whether to scroll the conversation to its newest message.
     pub scroll_to_bottom: bool,
@@ -1778,6 +1780,8 @@ impl App {
             update_download: Default::default(),
             update_support: None,
             update_inspecting: false,
+            update_checking: false,
+            update_check_message: None,
             update_arguments: Vec::new(),
             scroll_to_bottom: true,
             scroll_to_bottom_forced: false,
@@ -5074,6 +5078,35 @@ impl App {
                     );
                 }
                 self.update = Some(notice);
+            }
+            Event::UpdateCheckResult(result) => {
+                self.update_checking = false;
+                match result {
+                    Ok(Some(release)) => {
+                        let text = crate::i18n::gettext(self.locale, "Supp {version} is available")
+                            .replace("{version}", &release.version);
+                        self.update_check_message = Some(text.clone());
+                        self.update = Some(release);
+                        self.toast(text);
+                        self.show_update = true;
+                        self.inspect_update();
+                    }
+                    Ok(None) => {
+                        let text = crate::i18n::gettext(self.locale, "Supp {version} is up to date")
+                            .replace("{version}", env!("CARGO_PKG_VERSION"));
+                        self.update_check_message = Some(text.clone());
+                        self.toast(text);
+                    }
+                    Err(error) => {
+                        let text = crate::i18n::gettext(
+                            self.locale,
+                            "Could not check for updates: {error}",
+                        )
+                        .replace("{error}", &error);
+                        self.update_check_message = Some(text.clone());
+                        self.toast_error(text);
+                    }
+                }
             }
             Event::UpdateSupport(result) => {
                 self.update_support = Some(result);
@@ -9863,6 +9896,14 @@ impl App {
             Action::ShowUpdate => {
                 self.show_update = self.update.is_some();
                 self.inspect_update();
+            }
+            Action::CheckForUpdatesNow => {
+                if !self.update_checking {
+                    self.update_checking = true;
+                    self.update_check_message = None;
+                    self.last_update_check = Some(Instant::now());
+                    self.backend.send(Command::CheckForUpdatesNow);
+                }
             }
             Action::CloseUpdate => self.show_update = false,
             Action::DownloadUpdate => self.download_update(),
@@ -27691,5 +27732,42 @@ mod app_lock_tests {
         assert_eq!(app.accounts[0].id, first_id);
         assert_eq!(app.open_chat.as_deref(), Some("peer1@s.whatsapp.net"));
         assert_eq!(app.composer, "draft in session 1");
+    }
+
+    #[test]
+    fn update_notifications_and_manual_check_use_spanish_locale() {
+        let mut settings = settings(None);
+        settings.interface_language = Some(crate::i18n::Locale::Spanish);
+        let mut app = app_with(settings);
+        let ctx = egui::Context::default();
+
+        app.apply_backend_event(
+            Event::UpdateAvailable {
+                version: "2.0.8".into(),
+                url: "https://github.com/ixyren/Supp/releases/tag/v2.0.8".into(),
+            },
+            true,
+        );
+        assert_eq!(app.toasts.last().unwrap().message, "Supp 2.0.8 está disponible");
+
+        app.apply(Action::CheckForUpdatesNow, &ctx);
+        assert!(app.update_checking);
+        app.apply_backend_event(Event::UpdateCheckResult(Ok(None)), true);
+        assert!(!app.update_checking);
+        assert_eq!(
+            app.toasts.last().unwrap().message,
+            format!("Supp {} está actualizado", env!("CARGO_PKG_VERSION"))
+        );
+
+        app.apply_backend_event(
+            Event::UpdateCheckResult(Ok(Some(crate::updates::Release {
+                version: "2.0.9".into(),
+                url: "https://github.com/ixyren/Supp/releases/tag/v2.0.9".into(),
+                published_at: None,
+            }))),
+            true,
+        );
+        assert!(app.show_update);
+        assert_eq!(app.toasts.last().unwrap().message, "Supp 2.0.9 está disponible");
     }
 }

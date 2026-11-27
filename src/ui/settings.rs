@@ -847,6 +847,68 @@ fn sections(app: &App) -> Vec<Section> {
         ),
         |settings| &mut settings.download_updates_automatically,
     );
+    let update_description = match &app.update_check_message {
+        Some(message) => Text {
+            shown: message.clone().into(),
+            source: message.clone().into(),
+        },
+        None => {
+            let base = translated(
+                locale,
+                "Force an immediate check against GitHub Releases (current: v{version}).",
+            );
+            let version = env!("CARGO_PKG_VERSION");
+            Text {
+                shown: base.shown.replace("{version}", version).into(),
+                source: base.source.replace("{version}", version).into(),
+            }
+        }
+    };
+    system.row(
+        translated(locale, "Check for updates now"),
+        update_description,
+        move |ui, app| {
+            let palette = app.palette;
+            let locale = app.locale;
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                if app.update.is_some()
+                    && theme::soft_button(
+                        ui,
+                        &palette,
+                        Some(Icon::Download),
+                        &crate::i18n::gettext(locale, "Update"),
+                        true,
+                    )
+                    .clicked()
+                {
+                    app.actions.push(Action::ShowUpdate);
+                }
+                if app.update_checking {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 6.0;
+                        theme::spinner(ui, 14.0, palette.accent);
+                        theme::text(
+                            ui,
+                            crate::i18n::gettext(locale, "Checking…"),
+                            theme::regular(13.0),
+                            palette.secondary,
+                        );
+                    });
+                } else if theme::soft_button(
+                    ui,
+                    &palette,
+                    Some(Icon::Refresh),
+                    &crate::i18n::gettext(locale, "Check now"),
+                    false,
+                )
+                .clicked()
+                {
+                    app.actions.push(Action::CheckForUpdatesNow);
+                }
+            });
+        },
+    );
     let environment = app
         .settings
         .proxy

@@ -1728,6 +1728,14 @@ struct GridContext<'a> {
     downloading: Option<&'a Path>,
 }
 
+fn sticker_audio_clock(status: crate::audio::Status) -> Option<std::time::Duration> {
+    match status.state {
+        crate::audio::State::Playing => Some(status.position),
+        crate::audio::State::Loading => Some(std::time::Duration::ZERO),
+        crate::audio::State::Idle | crate::audio::State::Paused => None,
+    }
+}
+
 fn sticker_audio_badge_rect(tile: Rect) -> Rect {
     Rect::from_min_size(pos2(tile.right() - 25.0, tile.bottom() - 25.0), Vec2::splat(22.0))
 }
@@ -1859,11 +1867,10 @@ fn sticker_grid(
                 }
                 let has_audio = grid.audio.contains_key(path);
                 let audio_key = App::sticker_preview_audio_key(path);
-                let audio_playing = has_audio
-                    && matches!(
-                        grid.player.status(&audio_key).state,
-                        crate::audio::State::Playing | crate::audio::State::Loading
-                    );
+                let audio_clock = has_audio
+                    .then(|| sticker_audio_clock(grid.player.status(&audio_key)))
+                    .flatten();
+                let audio_playing = audio_clock.is_some();
                 let audio_downloading =
                     has_audio && grid.downloading.is_some_and(|wanted| wanted == path.as_path());
                 paint_tile(
@@ -1873,6 +1880,7 @@ fn sticker_grid(
                     rect,
                     response.hovered(),
                     animate || audio_playing,
+                    audio_clock,
                 );
                 let mut badge_clicked = false;
                 if has_audio {
@@ -1974,6 +1982,7 @@ fn paint_tile(
     rect: Rect,
     hovered: bool,
     animate: bool,
+    clock: Option<std::time::Duration>,
 ) {
     if !ui.is_rect_visible(rect) {
         return;
@@ -1984,7 +1993,7 @@ fn paint_tile(
     let shown = rect.shrink(4.0);
     let animated = moves(ui.ctx(), path);
     let played = animated
-        && match crate::animation::frame(ui, path, rect, animate) {
+        && match crate::animation::frame_synced(ui, path, rect, animate, clock) {
             crate::animation::Frame::Ready(texture) => {
                 let size = texture.size_vec2();
                 let scale = (shown.width() / size.x).min(shown.height() / size.y);
@@ -2024,7 +2033,7 @@ pub fn sticker_preview_grid(
         ui.horizontal(|ui| {
             for path in row {
                 let (rect, response) = ui.allocate_exact_size(Vec2::splat(cell), Sense::hover());
-                paint_tile(ui, palette, path, rect, response.hovered(), animate);
+                paint_tile(ui, palette, path, rect, response.hovered(), animate, None);
             }
         });
     }
@@ -2415,5 +2424,32 @@ mod pack_tests {
             app.actions.contains(&Action::SendSticker(sticker)),
             "tile click still sends the sticker"
         );
+    }
+
+    #[test]
+    fn sticker_audio_clock_follows_playback_state() {
+        use std::time::Duration;
+        let idle = crate::audio::Status {
+            state: crate::audio::State::Idle,
+            position: Duration::from_secs(2),
+            total: Duration::from_secs(5),
+        };
+        let paused = crate::audio::Status {
+            state: crate::audio::State::Paused,
+            ..idle
+        };
+        let loading = crate::audio::Status {
+            state: crate::audio::State::Loading,
+            ..idle
+        };
+        let playing = crate::audio::Status {
+            state: crate::audio::State::Playing,
+            position: Duration::from_millis(750),
+            total: Duration::from_secs(5),
+        };
+        assert_eq!(sticker_audio_clock(idle), None);
+        assert_eq!(sticker_audio_clock(paused), None);
+        assert_eq!(sticker_audio_clock(loading), Some(Duration::ZERO));
+        assert_eq!(sticker_audio_clock(playing), Some(Duration::from_millis(750)));
     }
 }

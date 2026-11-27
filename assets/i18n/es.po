@@ -4602,3 +4602,24 @@ msgstr "Nivel de transparencia de las tarjetas de notificación en el escritorio
 msgid "Visual effect when a notification appears."
 msgstr "Efecto visual al aparecer una notificación."
 
+msgid "Check for updates now"
+msgstr "Buscar actualizaciones ahora"
+
+msgid "Check now"
+msgstr "Buscar ahora"
+
+msgid "Checking…"
+msgstr "Buscando…"
+
+#, rust-format
+msgid "Could not check for updates: {error}"
+msgstr "No se pudieron buscar actualizaciones: {error}"
+
+#, rust-format
+msgid "Force an immediate check against GitHub Releases (current: v{version})."
+msgstr "Fuerza una búsqueda inmediata en GitHub Releases (actual: v{version})."
+
+#, rust-format
+msgid "Supp {version} is up to date"
+msgstr "Supp {version} está actualizado"
+
