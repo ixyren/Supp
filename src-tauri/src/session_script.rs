@@ -56,11 +56,11 @@ pub fn build_init_script(session_id: &str) -> String {
         if (readyReported) return;
         readyReported = true;
         invokeCmd('report_session_ready', {{ sessionId: SESSION_ID }});
-        setTimeout(() => {{
-            if (typeof extractProfileAvatar === 'function') {{
-                extractProfileAvatar();
-            }}
-        }}, 1200);
+        if (typeof extractProfileAvatar === 'function') {{
+            extractProfileAvatar();
+            setTimeout(extractProfileAvatar, 450);
+            setTimeout(extractProfileAvatar, 1500);
+        }}
     }};
 
     const checkWhatsAppReady = () => {{
@@ -578,26 +578,44 @@ pub fn build_init_script(session_id: &str) -> String {
     let avatarExtracting = false;
 
     const findProfileAvatarImg = () => {{
+        const isAvatarCandidate = (img, checkCornerBounds = false) => {{
+            if (!img || !img.tagName || img.tagName.toUpperCase() !== 'IMG') return false;
+            if (img.closest && (img.closest('#pane-side') || img.closest('#main'))) return false;
+            if (!img.complete || img.naturalWidth < 24 || img.naturalHeight < 24) return false;
+            if (!document.hidden) {{
+                if (!isElementVisible(img)) return false;
+                const rect = img.getBoundingClientRect();
+                if (rect.width < 20 || rect.height < 20) return false;
+                if (checkCornerBounds && (rect.left >= 100 || rect.width > 72)) return false;
+            }} else if (checkCornerBounds) {{
+                const rect = img.getBoundingClientRect();
+                if (rect.width > 0 && (rect.left >= 100 || rect.width < 20 || rect.width > 72)) return false;
+            }}
+            const src = img.currentSrc || img.src || '';
+            return Boolean(src);
+        }};
+
         const selectors = [
-            'header [data-testid="menu-bar-profile"] img',
-            'header button[aria-label*="Perfil" i] img, header button[aria-label*="Profile" i] img',
+            '[data-testid="menu-bar-profile"] img',
+            '[aria-label*="Perfil" i] img, [aria-label*="Profile" i] img',
             '#side header img',
-            'header img[src*="pps.whatsapp.net"], header img[src^="blob:"], header img[src^="data:image/"]'
+            'header img[src*="pps.whatsapp.net"], header img[src^="blob:"], header img[src^="data:image/"], nav img[src*="pps.whatsapp.net"], nav img[src^="blob:"], nav img[src^="data:image/"]'
         ];
 
         for (const selector of selectors) {{
             const nodes = document.querySelectorAll(selector);
             for (const img of nodes) {{
-                if (!img || !img.tagName || img.tagName.toUpperCase() !== 'IMG') continue;
-                if (img.closest && img.closest('#pane-side')) continue;
-                if (!isElementVisible(img)) continue;
-                if (!img.complete || img.naturalWidth < 24 || img.naturalHeight < 24) continue;
-                const rect = img.getBoundingClientRect();
-                if (rect.width < 20 || rect.height < 20) continue;
+                if (!isAvatarCandidate(img, false)) continue;
                 const src = img.currentSrc || img.src || '';
-                if (!src) continue;
                 return {{ img, src }};
             }}
+        }}
+
+        const fallbackImgs = document.querySelectorAll('img[src*="pps.whatsapp.net"], img[src^="blob:"], img[src^="data:image/"]');
+        for (const img of fallbackImgs) {{
+            if (!isAvatarCandidate(img, true)) continue;
+            const src = img.currentSrc || img.src || '';
+            return {{ img, src }};
         }}
         return null;
     }};
@@ -682,6 +700,15 @@ pub fn build_init_script(session_id: &str) -> String {
         }}
     }}
 
+    window.addEventListener('focus', () => {{
+        extractProfileAvatar();
+    }});
+    document.addEventListener('visibilitychange', () => {{
+        if (!document.hidden) {{
+            extractProfileAvatar();
+            setTimeout(extractProfileAvatar, 600);
+        }}
+    }});
     setInterval(extractProfileAvatar, 2500);
 }})();
 "#,

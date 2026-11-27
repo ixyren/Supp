@@ -20,22 +20,8 @@ import {
   X,
   ShieldCheck,
 } from 'lucide-react';
-import { EASE_EMPHASIZED, SPRING_SOFT, SPRING_SNAPPY } from './motionTokens';
+import { SPRING_SOFT, SPRING_SNAPPY } from './motionTokens';
 import { MaterialSwitch, SessionAvatar } from './UiPrimitives';
-
-const cardVariants = {
-  hidden: { opacity: 0, y: 14, scale: 0.985 },
-  visible: (idx) => ({
-    opacity: 1,
-    y: 0,
-    scale: 1,
-    transition: {
-      duration: 0.24,
-      delay: 0.035 * idx,
-      ease: EASE_EMPHASIZED,
-    },
-  }),
-};
 
 export function PreferencesPanel({
   settings,
@@ -137,11 +123,7 @@ export function PreferencesPanel({
 
       <div className="relative z-10 max-w-5xl mx-auto px-6 sm:px-8 py-8 flex flex-col gap-5">
         {/* Bento Row 1: Hero Header Card */}
-        <Motion.section
-          custom={0}
-          variants={cardVariants}
-          initial="hidden"
-          animate="visible"
+        <section
           className="bg-[#181c13] border border-[#2c3323] rounded-[28px] p-6 m3-elevation-2 relative overflow-hidden"
         >
           <div className="absolute right-0 top-0 w-72 h-44 bg-[radial-gradient(circle_at_top_right,rgba(198,255,0,0.11),transparent_70%)] pointer-events-none" />
@@ -213,15 +195,11 @@ export function PreferencesPanel({
               </Motion.button>
             </div>
           </div>
-        </Motion.section>
+        </section>
 
         {/* Bento Row 2: Active Sessions Quick-Overview OR Inviting Empty State */}
         {instances.length === 0 ? (
-          <Motion.section
-            custom={1}
-            variants={cardVariants}
-            initial="hidden"
-            animate="visible"
+          <section
             className="bg-[#181c13] border border-[#c6ff00]/25 rounded-[28px] p-7 m3-elevation-2 relative overflow-hidden"
           >
             <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,rgba(198,255,0,0.07),transparent_68%)] pointer-events-none" />
@@ -261,13 +239,9 @@ export function PreferencesPanel({
                 <span>{isAddingSession ? 'Creando sesión...' : 'Crear mi primera sesión'}</span>
               </Motion.button>
             </div>
-          </Motion.section>
+          </section>
         ) : (
-          <Motion.section
-            custom={1}
-            variants={cardVariants}
-            initial="hidden"
-            animate="visible"
+          <section
             className="bg-[#181c13] border border-[#2c3323] rounded-[28px] p-5 m3-elevation-1"
           >
             <div className="flex items-center justify-between mb-3.5 px-1">
@@ -420,15 +394,11 @@ export function PreferencesPanel({
                 );
               })}
             </div>
-          </Motion.section>
+          </section>
         )}
 
         {/* Bento Row 3: System Behavior Toggles (2x2 Grid) */}
-        <Motion.section
-          custom={2}
-          variants={cardVariants}
-          initial="hidden"
-          animate="visible"
+        <section
           className="grid grid-cols-1 md:grid-cols-2 gap-3.5"
         >
           {toggleItems.map((item) => {
@@ -473,14 +443,10 @@ export function PreferencesPanel({
               </Motion.div>
             );
           })}
-        </Motion.section>
+        </section>
 
         {/* Bento Row 4: Shortcuts & Tips */}
-        <Motion.section
-          custom={3}
-          variants={cardVariants}
-          initial="hidden"
-          animate="visible"
+        <section
           className="bg-[#181c13] border border-[#2c3323] rounded-[28px] p-5 m3-elevation-1"
         >
           <div className="flex items-center justify-between mb-3.5 px-1">
@@ -512,7 +478,7 @@ export function PreferencesPanel({
               );
             })}
           </div>
-        </Motion.section>
+        </section>
 
         {/* Footer Branding */}
         <div className="pt-1 pb-3 flex items-center justify-center gap-2 text-[#737a67] text-xs">

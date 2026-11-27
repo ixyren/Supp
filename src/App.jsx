@@ -69,7 +69,7 @@ function App() {
   const [editingName, setEditingName] = useState('');
   const [isAddingSession, setIsAddingSession] = useState(false);
   const [isDraggingSession, setIsDraggingSession] = useState(false);
-  const [slideDirection, setSlideDirection] = useState(0);
+  const [settingsExiting, setSettingsExiting] = useState(false);
   const [notification, setNotification] = useState(null);
 
   // System settings state
@@ -101,6 +101,7 @@ function App() {
   const deletingSessionRef = useRef(deletingSessionId);
   const isDraggingSessionRef = useRef(isDraggingSession);
   const isAddingSessionRef = useRef(isAddingSession);
+  const settingsExitingRef = useRef(false);
   const introExitStartedRef = useRef(false);
   const introFinishedSentRef = useRef(false);
 
@@ -455,11 +456,10 @@ function App() {
 
       subTicker = setInterval(() => {
         setIntroSubProgress((prev) => {
-          if (prev >= 0.86) return prev;
-          const step = (0.86 - prev) * 0.16 + 0.025;
-          return Math.min(0.86, prev + step);
+          if (prev >= 0.30) return prev;
+          return Math.min(0.30, prev + 0.015);
         });
-      }, 75);
+      }, 100);
 
       let lastCompleteTime = 0;
       const markReadyStaggered = async (sessionId) => {
@@ -470,6 +470,7 @@ function App() {
           await waitMs(waitNeeded);
         }
         if (cancelled) return;
+        setIntroSubProgress(0);
         setReadySessionIds((prev) => {
           const next = new Set(prev);
           next.add(sessionId);
@@ -574,7 +575,7 @@ function App() {
 
   const handleTabChange = useCallback(
     async (targetTabId) => {
-      if (targetTabId === activeTabRef.current) return;
+      if (targetTabId === activeTabRef.current || settingsExitingRef.current) return;
       const list = instancesRef.current;
       const prevTab = activeTabRef.current;
       const prevIdx = getTabIndex(prevTab, list);
@@ -583,10 +584,11 @@ function App() {
 
       setContextMenu(null);
       setPanelTemporarilyOpen(false);
-      setSlideDirection(dir);
 
       if (targetTabId === 'settings') {
         setNotification(null);
+        settingsExitingRef.current = false;
+        setSettingsExiting(false);
         activeTabRef.current = 'settings';
         if (Bridge.isTauri()) {
           const liveW = isSidebarExpandedRef.current ? 280.0 : 80.0;
@@ -606,6 +608,14 @@ function App() {
           setActiveTab('settings');
         }
         return;
+      }
+
+      if (prevTab === 'settings') {
+        settingsExitingRef.current = true;
+        setSettingsExiting(true);
+        await new Promise((res) => setTimeout(res, 170));
+        settingsExitingRef.current = false;
+        setSettingsExiting(false);
       }
 
       activeTabRef.current = targetTabId;
@@ -732,9 +742,16 @@ function App() {
         await Bridge.createSessionWebview(newInstance.id, liveW, false);
       }
 
+      if (prevTab === 'settings') {
+        settingsExitingRef.current = true;
+        setSettingsExiting(true);
+        await new Promise((res) => setTimeout(res, 170));
+        settingsExitingRef.current = false;
+        setSettingsExiting(false);
+      }
+
       const latestList = instancesRef.current;
       const switchDir = prevTab === 'settings' ? 0 : 1;
-      setSlideDirection(switchDir);
       activeTabRef.current = newInstance.id;
       setActiveTab(newInstance.id);
 
@@ -790,13 +807,11 @@ function App() {
             ? newInst[Math.min(Math.max(deletedIdx, 0), newInst.length - 1)]
             : null;
         const nextTab = fallbackSession ? fallbackSession.id : 'settings';
-        const nextIdx =
-          nextTab === 'settings'
-            ? newInst.length
-            : newInst.findIndex((i) => i.id === nextTab);
-        const visualDir = nextIdx >= deletedIdx ? 1 : -1;
 
-        setSlideDirection(visualDir);
+        if (nextTab === 'settings') {
+          settingsExitingRef.current = false;
+          setSettingsExiting(false);
+        }
         activeTabRef.current = nextTab;
 
         if (Bridge.isTauri()) {
@@ -1000,10 +1015,10 @@ function App() {
       {activeTab === 'settings' && (
         <Motion.main
           key="settings-main"
-          initial={{ opacity: 0, y: slideDirection >= 0 ? 12 : -12 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.18, ease: EASE_EMPHASIZED }}
-          style={{ willChange: 'transform, opacity' }}
+          initial={{ opacity: 0 }}
+          animate={{ opacity: settingsExiting ? 0 : 1 }}
+          transition={{ duration: settingsExiting ? 0.16 : 0.22, ease: EASE_EMPHASIZED }}
+          style={{ willChange: 'opacity' }}
           className="flex-1 h-full relative overflow-hidden bg-[#12150e]"
         >
           <PreferencesPanel

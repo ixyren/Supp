@@ -18,13 +18,15 @@ export function IntroScreen({
     (i) => startedSessionIds.has(i.id) && !readySessionIds.has(i.id)
   ).length;
 
+  const pendingFraction = activeLoadingCount > 0 ? Math.min(0.30, subProgress) : 0;
+
   const progress = allReady
     ? 100
     : total === 0
     ? Math.round(subProgress * 100)
-    : Math.min(99, Math.round(((readyCount + activeLoadingCount * subProgress) / total) * 100));
+    : Math.min(99, Math.round(((readyCount + pendingFraction) / total) * 100));
 
-  const scaleProgress = Math.max(0.02, Math.min(1, progress / 100));
+  const scaleProgress = Math.max(0, Math.min(1, progress / 100));
 
   return (
     <div
@@ -102,7 +104,7 @@ export function IntroScreen({
         <div className="w-72 mb-6">
           <div className="w-full h-2 rounded-full bg-[#181c13] border border-[#2c3323] p-[1px] overflow-hidden">
             <Motion.div
-              initial={{ scaleX: 0.02 }}
+              initial={{ scaleX: 0 }}
               animate={{ scaleX: scaleProgress }}
               transition={{ duration: 0.2, ease: EASE_EXPAND }}
               style={{ transformOrigin: 'left center', willChange: 'transform' }}

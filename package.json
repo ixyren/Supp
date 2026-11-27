@@ -2,7 +2,7 @@
   "name": "supp",
   "productName": "Supp",
   "private": true,
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Gestor de multi-sesiones de WhatsApp",
   "author": "Javier Medina",
   "main": "electron/main.js",
