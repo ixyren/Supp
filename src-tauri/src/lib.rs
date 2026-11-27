@@ -1,6 +1,7 @@
 mod clipboard;
 mod external_url;
 mod session_script;
+mod updater;
 
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -584,6 +585,103 @@ mod commands {
     }
 
     #[tauri::command]
+    pub fn fade_session_webview(
+        app: AppHandle,
+        session_id: String,
+        opacity: f64,
+        duration_ms: Option<u64>,
+    ) -> Result<(), String> {
+        let clean_id = sanitize_session_id(&session_id)?;
+        let label = format!("session_{}", clean_id);
+        let Some(wv) = app.get_webview(&label) else {
+            return Ok(());
+        };
+        let clamped_op = if opacity.is_finite() {
+            opacity.clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        let ms = duration_ms.unwrap_or(140).min(1000);
+        let script = format!(
+            r#"
+            (function() {{
+                const root = document.documentElement;
+                if (!root) return;
+                root.style.backgroundColor = '#12150e';
+                root.style.willChange = 'opacity';
+                root.style.transition = 'opacity {ms}ms cubic-bezier(0.16, 1, 0.3, 1)';
+                root.style.opacity = '{clamped_op:.3}';
+            }})();
+            "#
+        );
+        wv.eval(&script)
+            .map_err(|e| format!("Error animando opacidad de sesión: {}", e))
+    }
+
+    #[tauri::command]
+    pub fn prepare_session_under_settings(app: AppHandle, session_id: String) -> Result<(), String> {
+        let clean_id = sanitize_session_id(&session_id)?;
+        let label = format!("session_{}", clean_id);
+        let window = app
+            .get_window("main")
+            .ok_or("Ventana principal no encontrada")?;
+        let logical_size = match get_window_logical_size(&window) {
+            Some(s) => s,
+            None => return Ok(()),
+        };
+        let height = logical_size.height.max(100.0);
+        let content_width = (logical_size.width - 80.0).max(100.0);
+
+        if let Some(main_wv) = app.get_webview("main") {
+            let _ = main_wv.set_auto_resize(false);
+            let _ = main_wv.set_position(LogicalPosition::new(0.0, 0.0));
+            let _ = main_wv.set_size(LogicalSize::new(logical_size.width, logical_size.height));
+            let _ = main_wv.show();
+        }
+
+        if let Some(wv) = app.get_webview(&label) {
+            let _ = wv.set_size(LogicalSize::new(content_width, height));
+            let _ = wv.set_position(LogicalPosition::new(80.0, 0.0));
+            let _ = wv.eval(
+                "if (document.documentElement) { document.documentElement.style.transition = 'none'; document.documentElement.style.opacity = '1'; }",
+            );
+            let _ = wv.show();
+        }
+
+        #[cfg(target_os = "windows")]
+        unsafe {
+            ensure_sidebar_on_top(&window);
+        }
+        Ok(())
+    }
+
+    #[tauri::command]
+    pub async fn check_for_updates() -> Result<updater::UpdateInfo, String> {
+        tauri::async_runtime::spawn_blocking(updater::check_for_updates_blocking)
+            .await
+            .map_err(|e| format!("Error buscando actualizaciones: {}", e))?
+    }
+
+    #[tauri::command]
+    pub async fn install_update(
+        app: AppHandle,
+        download_url: String,
+        asset_name: String,
+        is_portable: bool,
+    ) -> Result<(), String> {
+        tauri::async_runtime::spawn_blocking(move || {
+            updater::download_and_install_update_blocking(
+                &app,
+                &download_url,
+                &asset_name,
+                is_portable,
+            )
+        })
+        .await
+        .map_err(|e| format!("Error instalando actualización: {}", e))?
+    }
+
+    #[tauri::command]
     pub async fn create_session_webview(
         app: AppHandle,
         session_id: String,
@@ -772,6 +870,9 @@ mod commands {
             if let Some(ref inc) = incoming_wv {
                 let _ = inc.set_size(LogicalSize::new(content_width, height));
                 let _ = inc.set_position(LogicalPosition::new(80.0, 0.0));
+                let _ = inc.eval(
+                    "if (document.documentElement) { document.documentElement.style.opacity = '1'; }",
+                );
                 let _ = inc.show();
             }
 
@@ -822,6 +923,9 @@ mod commands {
         if let Some(ref inc) = incoming_wv {
             let _ = inc.set_size(LogicalSize::new(content_width, height));
             let _ = inc.set_position(LogicalPosition::new(80.0, inc_start_y));
+            let _ = inc.eval(
+                "if (document.documentElement) { document.documentElement.style.opacity = '1'; }",
+            );
             let _ = inc.show();
         }
         if let Some(ref out) = outgoing_wv {
@@ -1283,6 +1387,10 @@ pub fn run() {
             commands::finish_intro,
             commands::destroy_session,
             commands::reload_session,
+            commands::fade_session_webview,
+            commands::prepare_session_under_settings,
+            commands::check_for_updates,
+            commands::install_update,
             commands::open_external_url,
             commands::copy_image_to_clipboard,
             commands::copy_video_to_clipboard,

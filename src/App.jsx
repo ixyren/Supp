@@ -75,7 +75,7 @@ function App() {
   const [editingName, setEditingName] = useState('');
   const [isAddingSession, setIsAddingSession] = useState(false);
   const [isDraggingSession, setIsDraggingSession] = useState(false);
-  const [settingsExiting, setSettingsExiting] = useState(false);
+  const [settingsOpaque, setSettingsOpaque] = useState(() => instances.length === 0);
   const [notification, setNotification] = useState(null);
 
   // System settings state
@@ -107,7 +107,8 @@ function App() {
   const deletingSessionRef = useRef(deletingSessionId);
   const isDraggingSessionRef = useRef(isDraggingSession);
   const isAddingSessionRef = useRef(isAddingSession);
-  const settingsExitingRef = useRef(false);
+  const isTransitioningSettingsRef = useRef(false);
+  const settingsRafRef = useRef(null);
   const introExitStartedRef = useRef(false);
   const introFinishedSentRef = useRef(false);
 
@@ -579,9 +580,31 @@ function App() {
     return id === 'settings' ? list.length : list.findIndex((i) => i.id === id);
   }, []);
 
+  const revealSettingsSmooth = useCallback(() => {
+    if (settingsRafRef.current) {
+      cancelAnimationFrame(settingsRafRef.current);
+    }
+    setSettingsOpaque(false);
+    settingsRafRef.current = requestAnimationFrame(() => {
+      settingsRafRef.current = requestAnimationFrame(() => {
+        if (activeTabRef.current === 'settings') {
+          setSettingsOpaque(true);
+        }
+      });
+    });
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (settingsRafRef.current) {
+        cancelAnimationFrame(settingsRafRef.current);
+      }
+    };
+  }, []);
+
   const handleTabChange = useCallback(
     async (targetTabId) => {
-      if (targetTabId === activeTabRef.current || settingsExitingRef.current) return;
+      if (targetTabId === activeTabRef.current || isTransitioningSettingsRef.current) return;
       const list = instancesRef.current;
       const prevTab = activeTabRef.current;
       const prevIdx = getTabIndex(prevTab, list);
@@ -591,14 +614,18 @@ function App() {
       setContextMenu(null);
       setPanelTemporarilyOpen(false);
 
+      // Fase 1 -> 2 hacia Ajustes: desvanecer sesión activa, expandir main_wv en segundo plano y luego hacer fade-in de Ajustes
       if (targetTabId === 'settings') {
+        isTransitioningSettingsRef.current = true;
         setNotification(null);
-        settingsExitingRef.current = false;
-        setSettingsExiting(false);
-        activeTabRef.current = 'settings';
-        if (Bridge.isTauri()) {
-          const liveW = isSidebarExpandedRef.current ? 280.0 : 80.0;
-          try {
+        const liveW = isSidebarExpandedRef.current ? 280.0 : 80.0;
+        try {
+          if (Bridge.isTauri() && prevTab && prevTab !== 'settings') {
+            await Bridge.fadeSessionWebview(prevTab, 0, 130);
+            await new Promise((res) => setTimeout(res, 135));
+          }
+          activeTabRef.current = 'settings';
+          if (Bridge.isTauri()) {
             await Bridge.switchSession(
               'settings',
               list.map((i) => i.id),
@@ -606,36 +633,65 @@ function App() {
               dir,
               prevTab
             );
-          } catch (err) {
-            console.error('Error switching to settings:', err);
           }
-        }
-        if (activeTabRef.current === 'settings') {
+          setSettingsOpaque(false);
           setActiveTab('settings');
+          revealSettingsSmooth();
+        } catch (err) {
+          console.error('Error switching to settings:', err);
+          activeTabRef.current = 'settings';
+          setActiveTab('settings');
+          setSettingsOpaque(true);
+        } finally {
+          isTransitioningSettingsRef.current = false;
         }
         return;
       }
 
+      // Fase 1 -> 2 saliendo de Ajustes: posicionar/cargar la sesión debajo de Ajustes, desvanecer Ajustes por encima y revelarla
       if (prevTab === 'settings') {
-        settingsExitingRef.current = true;
-        setSettingsExiting(true);
-        await new Promise((res) => setTimeout(res, 170));
-        settingsExitingRef.current = false;
-        setSettingsExiting(false);
+        isTransitioningSettingsRef.current = true;
+        const liveW = isSidebarExpandedRef.current ? 280.0 : 80.0;
+        try {
+          if (Bridge.isTauri()) {
+            await Bridge.prepareSessionUnderSettings(targetTabId);
+          }
+          setSettingsOpaque(false);
+          await new Promise((res) => setTimeout(res, 185));
+
+          activeTabRef.current = targetTabId;
+          setActiveTab(targetTabId);
+
+          if (Bridge.isTauri()) {
+            await Bridge.switchSession(
+              targetTabId,
+              list.map((i) => i.id),
+              liveW,
+              0,
+              'settings'
+            );
+            Bridge.fadeSessionWebview(targetTabId, 1, 90);
+          }
+        } catch (err) {
+          console.error('Error leaving settings:', err);
+        } finally {
+          isTransitioningSettingsRef.current = false;
+        }
+        return;
       }
 
+      // Cambio entre dos sesiones activas
       activeTabRef.current = targetTabId;
       setActiveTab(targetTabId);
 
       if (Bridge.isTauri()) {
         const liveW = isSidebarExpandedRef.current ? 280.0 : 80.0;
-        const switchDir = prevTab === 'settings' ? 0 : dir;
         try {
           await Bridge.switchSession(
             targetTabId,
             list.map((i) => i.id),
             liveW,
-            switchDir,
+            dir,
             prevTab
           );
         } catch (err) {
@@ -643,7 +699,7 @@ function App() {
         }
       }
     },
-    [getTabIndex]
+    [getTabIndex, revealSettingsSmooth]
   );
 
   const handleReorder = useCallback((newOrder) => {
@@ -749,11 +805,13 @@ function App() {
       }
 
       if (prevTab === 'settings') {
-        settingsExitingRef.current = true;
-        setSettingsExiting(true);
-        await new Promise((res) => setTimeout(res, 170));
-        settingsExitingRef.current = false;
-        setSettingsExiting(false);
+        isTransitioningSettingsRef.current = true;
+        if (Bridge.isTauri()) {
+          await Bridge.prepareSessionUnderSettings(newInstance.id);
+        }
+        setSettingsOpaque(false);
+        await new Promise((res) => setTimeout(res, 185));
+        isTransitioningSettingsRef.current = false;
       }
 
       const latestList = instancesRef.current;
@@ -770,6 +828,7 @@ function App() {
           switchDir,
           prevTab
         );
+        Bridge.fadeSessionWebview(newInstance.id, 1, 90);
         // Re-sync in case pointer left sidebar while webview creation/switch was in flight
         const postW = isSidebarExpandedRef.current ? 280.0 : 80.0;
         if (activeTabRef.current === newInstance.id) {
@@ -815,8 +874,7 @@ function App() {
         const nextTab = fallbackSession ? fallbackSession.id : 'settings';
 
         if (nextTab === 'settings') {
-          settingsExitingRef.current = false;
-          setSettingsExiting(false);
+          setSettingsOpaque(false);
         }
         activeTabRef.current = nextTab;
 
@@ -826,6 +884,10 @@ function App() {
             (sidebarHovered && (hoverExpandEnabledRef.current || panelTemporarilyOpen));
           const liveW = keepExpanded ? 280.0 : 80.0;
           try {
+            if (nextTab === 'settings') {
+              await Bridge.fadeSessionWebview(id, 0, 120);
+              await new Promise((res) => setTimeout(res, 125));
+            }
             await Bridge.switchSession(
               nextTab,
               newInst.map((i) => i.id),
@@ -841,6 +903,9 @@ function App() {
           }
         }
         setActiveTab(nextTab);
+        if (nextTab === 'settings') {
+          revealSettingsSmooth();
+        }
       }
 
       if (Bridge.isTauri()) {
@@ -857,7 +922,7 @@ function App() {
       }
       triggerNotification({ message: 'Sesión eliminada correctamente', type: 'success' });
     },
-    [sidebarHovered, panelTemporarilyOpen, triggerNotification]
+    [sidebarHovered, panelTemporarilyOpen, triggerNotification, revealSettingsSmooth]
   );
 
   const handleToggleSetting = useCallback(
@@ -1021,9 +1086,9 @@ function App() {
       {activeTab === 'settings' && (
         <Motion.main
           key="settings-main"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: settingsExiting ? 0 : 1 }}
-          transition={{ duration: settingsExiting ? 0.16 : 0.22, ease: EASE_EMPHASIZED }}
+          initial={false}
+          animate={{ opacity: settingsOpaque ? 1 : 0 }}
+          transition={{ duration: settingsOpaque ? 0.2 : 0.17, ease: EASE_EMPHASIZED }}
           style={{ willChange: 'opacity' }}
           className="flex-1 h-full relative overflow-hidden bg-[#12150e]"
         >
@@ -1043,6 +1108,7 @@ function App() {
             onRenameSession={(id, newName) => handleUpdateSession(id, { name: newName })}
             onReloadSession={handleReloadSession}
             onDeleteSession={requestDeleteSession}
+            onNotify={triggerNotification}
           />
         </Motion.main>
       )}

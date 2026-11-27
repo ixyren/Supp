@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion as Motion } from 'framer-motion';
 import {
   Settings,
@@ -19,9 +19,19 @@ import {
   Check,
   X,
   ShieldCheck,
+  Download,
+  CheckCircle2,
+  AlertTriangle,
+  Sparkles,
 } from 'lucide-react';
-import { SPRING_SOFT, SPRING_SNAPPY } from './motionTokens';
+import { Bridge } from '../bridge';
+import { SPRING_SOFT, SPRING_SNAPPY, EASE_EXPAND } from './motionTokens';
 import { MaterialSwitch, SessionAvatar } from './UiPrimitives';
+
+function formatBytesMb(bytes) {
+  if (!bytes || bytes <= 0) return '';
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 export function PreferencesPanel({
   settings,
@@ -34,9 +44,85 @@ export function PreferencesPanel({
   onRenameSession,
   onReloadSession,
   onDeleteSession,
+  onNotify,
 }) {
   const [inlineEditId, setInlineEditId] = useState(null);
   const [inlineEditValue, setInlineEditValue] = useState('');
+  const [updateStatus, setUpdateStatus] = useState('idle'); // idle | checking | up_to_date | available | downloading | error
+  const [updateInfo, setUpdateInfo] = useState(null);
+  const [downloadProgress, setDownloadProgress] = useState({ downloaded: 0, total: 0, percent: 0 });
+  const [updateError, setUpdateError] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten = null;
+
+    Bridge.listenUpdateProgress((payload) => {
+      if (!cancelled) {
+        setDownloadProgress(payload);
+      }
+    }).then((fn) => {
+      if (cancelled) {
+        if (typeof fn === 'function') fn();
+        return;
+      }
+      if (typeof fn === 'function') unlisten = fn;
+    });
+
+    return () => {
+      cancelled = true;
+      if (typeof unlisten === 'function') unlisten();
+    };
+  }, []);
+
+  const handleCheckUpdates = async () => {
+    if (updateStatus === 'checking' || updateStatus === 'downloading') return;
+    setUpdateStatus('checking');
+    setUpdateError('');
+    try {
+      const info = await Bridge.checkForUpdates();
+      setUpdateInfo(info);
+      if (info && info.hasUpdate) {
+        setUpdateStatus('available');
+        onNotify?.({
+          message: `Nueva versión v${info.latestVersion} disponible`,
+          type: 'success',
+        });
+      } else {
+        setUpdateStatus('up_to_date');
+        onNotify?.({
+          message: `Supp ya está actualizado (v${info?.currentVersion || '1.0.5'})`,
+          type: 'success',
+        });
+      }
+    } catch (err) {
+      const msg = typeof err === 'string' ? err : err?.message || 'Error conectando con GitHub';
+      setUpdateError(msg);
+      setUpdateStatus('error');
+      onNotify?.({ message: 'No se pudo comprobar actualizaciones', type: 'error' });
+    }
+  };
+
+  const handleInstallUpdate = async () => {
+    if (!updateInfo || !updateInfo.downloadUrl || updateStatus === 'downloading') return;
+    setUpdateStatus('downloading');
+    setUpdateError('');
+    setDownloadProgress({ downloaded: 0, total: updateInfo.assetSize || 0, percent: 0 });
+    onNotify?.({ message: 'Descargando actualización de Supp...', type: 'loading' });
+
+    try {
+      await Bridge.installUpdate({
+        downloadUrl: updateInfo.downloadUrl,
+        assetName: updateInfo.assetName,
+        isPortable: updateInfo.isPortable,
+      });
+    } catch (err) {
+      const msg = typeof err === 'string' ? err : err?.message || 'No se pudo instalar la actualización';
+      setUpdateError(msg);
+      setUpdateStatus('error');
+      onNotify?.({ message: 'Error descargando o instalando actualización', type: 'error' });
+    }
+  };
 
   const totalUnread = instances.reduce((acc, inst) => acc + (inst.unread || 0), 0);
 
@@ -478,6 +564,131 @@ export function PreferencesPanel({
               );
             })}
           </div>
+        </section>
+
+        {/* Bento Row 5: Actualizaciones automáticas desde GitHub */}
+        <section className="bg-[#181c13] border border-[#2c3323] rounded-[28px] p-5 m3-elevation-1">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="flex items-start gap-3.5 min-w-0">
+              <div className="w-11 h-11 rounded-2xl bg-[#2a3e00] border border-[#c6ff00]/30 text-[#c6ff00] flex items-center justify-center shrink-0">
+                <Sparkles size={20} strokeWidth={2.2} />
+              </div>
+
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 className="text-sm font-bold text-[#e7ebdc] tracking-tight">
+                    Actualizaciones desde GitHub
+                  </h3>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#21271a] border border-[#2c3323] text-[#c6ff00] tabular-nums">
+                    v{updateInfo?.currentVersion || '1.0.5'}
+                  </span>
+                  {updateInfo && (
+                    <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-[#21271a] border border-[#2c3323] text-[#a2a895]">
+                      {updateInfo.isPortable ? 'Modo Portable' : 'Instalado'}
+                    </span>
+                  )}
+                </div>
+
+                <p className="text-xs text-[#a2a895] mt-1">
+                  {updateStatus === 'checking'
+                    ? 'Consultando último lanzamiento en ixyren/Supp...'
+                    : updateStatus === 'available' && updateInfo
+                    ? `Nueva versión v${updateInfo.latestVersion} lista para instalar (${updateInfo.assetName || 'GitHub Release'}).`
+                    : updateStatus === 'up_to_date' && updateInfo
+                    ? `Tienes la última versión disponible (v${updateInfo.latestVersion}).`
+                    : updateStatus === 'downloading'
+                    ? `Descargando ${updateInfo?.assetName || 'actualización'} (${downloadProgress.percent}%)${
+                        downloadProgress.total > 0
+                          ? ` • ${formatBytesMb(downloadProgress.downloaded)} / ${formatBytesMb(downloadProgress.total)}`
+                          : ''
+                      }...`
+                    : updateStatus === 'error'
+                    ? updateError || 'No se pudo comprobar actualizaciones.'
+                    : 'Comprueba e instala nuevas versiones del instalador o portable directamente desde GitHub Releases.'}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() =>
+                  Bridge.openExternalUrl(
+                    updateInfo?.releaseUrl || 'https://github.com/ixyren/Supp/releases'
+                  )
+                }
+                className="h-9 px-3.5 rounded-2xl bg-[#21271a] hover:bg-[#2b3222] border border-[#2c3323] text-xs font-semibold text-[#e7ebdc] inline-flex items-center gap-1.5 transition-colors cursor-pointer"
+              >
+                <span>GitHub</span>
+                <ExternalLink size={13} className="text-[#a2a895]" />
+              </button>
+
+              {updateStatus === 'available' && updateInfo?.downloadUrl ? (
+                <Motion.button
+                  type="button"
+                  onClick={handleInstallUpdate}
+                  whileHover={{ scale: 1.03 }}
+                  whileTap={{ scale: 0.96 }}
+                  transition={SPRING_SNAPPY}
+                  className="h-9 px-4 rounded-2xl bg-[#c6ff00] hover:bg-[#d8ff59] text-[#182900] text-xs font-extrabold inline-flex items-center gap-1.5 shadow-[0_4px_16px_rgba(198,255,0,0.22)] cursor-pointer"
+                >
+                  <Download size={14} strokeWidth={2.5} />
+                  <span>Actualizar a v{updateInfo.latestVersion}</span>
+                </Motion.button>
+              ) : (
+                <Motion.button
+                  type="button"
+                  disabled={updateStatus === 'checking' || updateStatus === 'downloading'}
+                  onClick={handleCheckUpdates}
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.96 }}
+                  transition={SPRING_SNAPPY}
+                  className="h-9 px-4 rounded-2xl bg-[#2a3e00] hover:bg-[#354f00] border border-[#c6ff00]/35 text-[#c6ff00] text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-60 transition-colors"
+                >
+                  {updateStatus === 'checking' || updateStatus === 'downloading' ? (
+                    <Motion.span
+                      animate={{ rotate: 360 }}
+                      transition={{ duration: 0.9, repeat: Infinity, ease: 'linear' }}
+                      className="flex items-center"
+                    >
+                      <RefreshCw size={13} strokeWidth={2.5} />
+                    </Motion.span>
+                  ) : updateStatus === 'up_to_date' ? (
+                    <CheckCircle2 size={14} />
+                  ) : updateStatus === 'error' ? (
+                    <AlertTriangle size={14} className="text-red-400" />
+                  ) : (
+                    <RefreshCw size={13} />
+                  )}
+                  <span>
+                    {updateStatus === 'checking'
+                      ? 'Buscando...'
+                      : updateStatus === 'downloading'
+                      ? `Descargando ${downloadProgress.percent}%`
+                      : 'Buscar actualizaciones'}
+                  </span>
+                </Motion.button>
+              )}
+            </div>
+          </div>
+
+          {updateStatus === 'downloading' && (
+            <div className="mt-4 w-full h-2 rounded-full bg-[#12150e] border border-[#2c3323] overflow-hidden p-[1px]">
+              <Motion.div
+                initial={{ scaleX: 0 }}
+                animate={{ scaleX: Math.max(0.02, Math.min(1, downloadProgress.percent / 100)) }}
+                transition={{ duration: 0.16, ease: EASE_EXPAND }}
+                style={{ transformOrigin: 'left center', willChange: 'transform' }}
+                className="w-full h-full rounded-full bg-[#c6ff00]"
+              />
+            </div>
+          )}
+
+          {updateStatus === 'available' && updateInfo?.releaseNotes && (
+            <div className="mt-3.5 p-3 rounded-2xl bg-[#12150e] border border-[#2c3323] text-[11px] text-[#a2a895] leading-relaxed max-h-24 overflow-y-auto scrollbar-thin whitespace-pre-wrap">
+              {updateInfo.releaseNotes}
+            </div>
+          )}
         </section>
 
         {/* Footer Branding */}

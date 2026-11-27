@@ -194,6 +194,76 @@ export const Bridge = {
     return { success: true };
   },
 
+  fadeSessionWebview: async (sessionId, opacity, durationMs = 140) => {
+    if (Bridge.isTauri() && sessionId && sessionId !== 'settings') {
+      try {
+        return await invoke('fade_session_webview', {
+          sessionId,
+          opacity,
+          durationMs,
+        });
+      } catch (e) {
+        console.error('Error in Tauri fade_session_webview:', e);
+      }
+    }
+    return { success: true };
+  },
+
+  prepareSessionUnderSettings: async (sessionId) => {
+    if (Bridge.isTauri() && sessionId && sessionId !== 'settings') {
+      try {
+        return await invoke('prepare_session_under_settings', { sessionId });
+      } catch (e) {
+        console.error('Error in Tauri prepare_session_under_settings:', e);
+      }
+    }
+    return { success: true };
+  },
+
+  checkForUpdates: async () => {
+    if (Bridge.isTauri()) {
+      return await invokeRequired('check_for_updates');
+    }
+    return {
+      currentVersion: '1.0.5',
+      latestVersion: '1.0.5',
+      hasUpdate: false,
+      releaseNotes: '',
+      releaseUrl: 'https://github.com/ixyren/Supp/releases',
+      publishedAt: '',
+      assetName: '',
+      assetSize: 0,
+      downloadUrl: '',
+      isPortable: true,
+    };
+  },
+
+  installUpdate: async ({ downloadUrl, assetName, isPortable }) => {
+    if (Bridge.isTauri()) {
+      return await invokeRequired('install_update', {
+        downloadUrl,
+        assetName,
+        isPortable,
+      });
+    }
+    return { success: false };
+  },
+
+  listenUpdateProgress: async (callback) => {
+    if (Bridge.isTauri()) {
+      try {
+        return await listen('update-download-progress', (event) => {
+          if (event.payload) {
+            callback(event.payload);
+          }
+        });
+      } catch (e) {
+        console.warn('Error listening for update progress in Tauri:', e);
+      }
+    }
+    return () => {};
+  },
+
   listenUnread: async (callback) => {
     if (Bridge.isTauri()) {
       try {

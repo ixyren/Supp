@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-prepare-session-under-settings"
+description = "Enables the prepare_session_under_settings command without any pre-configured scope."
+commands.allow = ["prepare_session_under_settings"]
+
+[[permission]]
+identifier = "deny-prepare-session-under-settings"
+description = "Denies the prepare_session_under_settings command without any pre-configured scope."
+commands.deny = ["prepare_session_under_settings"]
