@@ -1,66 +1,17 @@
-# Supp - Multi-Session WhatsApp Manager
+# Supp
 
-Aplicación de escritorio para gestionar múltiples sesiones de WhatsApp Web simultáneamente.
+Cliente nativo de WhatsApp multisesión para Windows construido 100% en **Rust** y **egui**, sin WebView2 ni motor de navegador.
 
-## Características
+Basado en la arquitectura nativa de [ZapFast](https://github.com/crmne/zapfast) (licencia MIT) sobre [whatsapp-rust](https://github.com/oxidezap/whatsapp-rust), adaptado con la estética **Material You 3 Expressive Dark-Lime** y tipografía **Google Sans** de Supp.
 
-- 🚀 Múltiples sesiones de WhatsApp Web aisladas
-- 🎨 Interfaz moderna con tema oscuro y acentos verde eléctrico
-- 🔔 Indicadores de mensajes no leídos
-- ⚙️ Configuración del sistema (inicio con Windows, bandeja del sistema)
-- 💾 Persistencia de sesiones y configuraciones
+## Características principales (v2.0.0)
 
-## Desarrollo
+- **100% Nativo en Rust + egui (Cero WebView2)**: Arranque instantáneo, bajo consumo de memoria y cifrado local SQLCipher.
+- **Multisesión aislada**: Vincula múltiples cuentas de WhatsApp en el mismo proceso con almacenamiento, cachés y claves totalmente separadas por sesión.
+- **Estética Dark-Lime Material You 3**: Paleta oscura lima (`#0d1009` / `#12150e` / `#181c13` / `#c6ff00`), tipografía **Google Sans** integrada e iconos Lucide.
+- **Llamadas, voz y multimedia nativos**: Notas de voz, reproducción integrada de video/GIF/stickers y llamadas VoIP sin navegador.
+- **Bandeja del sistema, enlaces externos y autoactualización**: Abre enlaces en el navegador predeterminado, permanece en bandeja y comprueba nuevas versiones desde GitHub Releases (`ixyren/Supp`).
 
-```bash
-# Instalar dependencias
-npm install
+## Licencias y avisos de terceros
 
-# Ejecutar en modo desarrollo (Electron + Vite)
-npm run electron:dev
-```
-
-## Compilación
-
-```bash
-# Compilar para Windows
-npm run electron:build:win
-
-# Compilar para macOS
-npm run electron:build:mac
-
-# Compilar para Linux
-npm run electron:build:linux
-```
-
-## Estructura del Proyecto
-
-```
-Supp/
-├── electron/
-│   ├── main.js       # Proceso principal de Electron
-│   └── preload.js    # Script de preload (puente IPC)
-├── src/
-│   ├── App.jsx       # Componente principal de React
-│   ├── index.css     # Estilos globales con Tailwind
-│   └── main.jsx      # Punto de entrada de React
-├── public/
-│   └── icon.png      # Icono de la aplicación
-└── package.json      # Configuración del proyecto
-```
-
-## Tecnologías
-
-- **Electron** - Framework de aplicaciones de escritorio
-- **React** - Biblioteca de interfaz de usuario
-- **Tailwind CSS** - Framework de estilos
-- **Vite** - Herramienta de compilación
-- **Lucide React** - Iconos
-
-## Autor
-
-Javier Medina
-
-## Licencia
-
-MIT
+Este proyecto deriva su infraestructura nativa de [ZapFast](https://github.com/crmne/zapfast) (Copyright © 2026 Carmine Paolino, licencia MIT). Consulta [`LICENSE`](LICENSE) y [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) para ver los avisos completos.
