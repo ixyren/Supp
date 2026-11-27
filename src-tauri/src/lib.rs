@@ -88,6 +88,9 @@ fn is_allowed_avatar_payload(raw: &str) -> bool {
         return false;
     };
     let h = host.trim_end_matches('.').to_ascii_lowercase();
+    if h == "static.whatsapp.net" || h.ends_with(".static.whatsapp.net") {
+        return false;
+    }
     external_url::is_whatsapp_host(&h) || h == "fbcdn.net" || h.ends_with(".fbcdn.net")
 }
 
@@ -1325,6 +1328,7 @@ mod tests {
         assert!(!is_allowed_avatar_payload(""));
         assert!(!is_allowed_avatar_payload("javascript:alert(1)"));
         assert!(!is_allowed_avatar_payload("http://pps.whatsapp.net/avatar.jpg"));
+        assert!(!is_allowed_avatar_payload("https://static.whatsapp.net/rsrc.php/meta-ai.png"));
         assert!(!is_allowed_avatar_payload("https://evil.example.com/avatar.jpg"));
         assert!(!is_allowed_avatar_payload("https://whatsapp.net.evil.com/a.jpg"));
     }

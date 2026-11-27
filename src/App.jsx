@@ -16,13 +16,19 @@ function loadSavedInstances() {
   try {
     const parsed = JSON.parse(saved);
     if (!Array.isArray(parsed)) return [];
-    return parsed.map((s) => ({
-      ...s,
-      avatar: s.avatar || DEFAULT_AVATAR,
-      isReady: Boolean(s.isReady ?? !Bridge.isTauri()),
-      hasError: false,
-      errorMsg: null,
-    }));
+    return parsed.map((s) => {
+      const savedAvatar =
+        typeof s.avatar === 'string' && /static\.whatsapp\.net/i.test(s.avatar)
+          ? DEFAULT_AVATAR
+          : s.avatar || DEFAULT_AVATAR;
+      return {
+        ...s,
+        avatar: savedAvatar,
+        isReady: Boolean(s.isReady ?? !Bridge.isTauri()),
+        hasError: false,
+        errorMsg: null,
+      };
+    });
   } catch (e) {
     console.error('Error parsing saved instances:', e);
     return [];

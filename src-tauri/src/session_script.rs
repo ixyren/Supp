@@ -577,46 +577,200 @@ pub fn build_init_script(session_id: &str) -> String {
     let lastAvatarSig = '';
     let avatarExtracting = false;
 
+    const safeRequire = (name) => {{
+        try {{
+            if (typeof window.require === 'function') {{
+                return window.require(name);
+            }}
+        }} catch (_) {{}}
+        return null;
+    }};
+
+    const unwrapModule = (mod) => (mod && mod.default ? mod.default : mod);
+
+    const pickValidProfilePicUrl = (pic) => {{
+        if (!pic) return null;
+        const attrs = pic.attributes || pic;
+        const candidates = [
+            attrs.imgFull,
+            attrs.img,
+            attrs.eurl,
+            pic.imgFull,
+            pic.img,
+            pic.eurl
+        ];
+        for (const url of candidates) {{
+            if (
+                typeof url === 'string' &&
+                /^https:\/\//i.test(url) &&
+                !/static\.whatsapp\.net/i.test(url)
+            ) {{
+                return url;
+            }}
+        }}
+        return null;
+    }};
+
+    const getAvatarFromWhatsAppStore = async () => {{
+        try {{
+            const rawPrefs = safeRequire('WAWebUserPrefsMeUser');
+            const prefs = unwrapModule(rawPrefs);
+            if (!prefs) return null;
+
+            const rawCandidates = [
+                typeof prefs.getMaybeMePnUser === 'function' && prefs.getMaybeMePnUser(),
+                typeof prefs.getMaybeMeUser === 'function' && prefs.getMaybeMeUser(),
+                typeof prefs.getMaybeMeLidUser === 'function' && prefs.getMaybeMeLidUser()
+            ].filter(Boolean);
+            if (rawCandidates.length === 0) return null;
+
+            const idCandidates = [];
+            const seenSerialized = new Set();
+            for (const cand of rawCandidates) {{
+                idCandidates.push(cand);
+                if (cand._serialized && !seenSerialized.has(cand._serialized)) {{
+                    seenSerialized.add(cand._serialized);
+                    idCandidates.push(cand._serialized);
+                }}
+            }}
+
+            // 1. Colección directa de miniaturas de perfil
+            const rawThumbCol = safeRequire('WAWebProfilePicThumbCollection');
+            const thumbCol = unwrapModule(rawThumbCol);
+            const colObj = thumbCol && (thumbCol.ProfilePicThumbCollection || thumbCol);
+            if (colObj) {{
+                for (const id of idCandidates) {{
+                    try {{
+                        if (typeof colObj.get === 'function') {{
+                            const cached = colObj.get(id);
+                            const url = pickValidProfilePicUrl(cached);
+                            if (url) return url;
+                        }}
+                    }} catch (_) {{}}
+                }}
+                for (const id of idCandidates) {{
+                    try {{
+                        if (typeof colObj.find === 'function') {{
+                            const fetched = await Promise.race([
+                                colObj.find(id),
+                                new Promise((res) => setTimeout(() => res(null), 2200))
+                            ]);
+                            const url = pickValidProfilePicUrl(fetched);
+                            if (url) return url;
+                        }}
+                    }} catch (_) {{}}
+                }}
+            }}
+
+            // 2. Bridge moderno de foto de perfil
+            const rawBridge = safeRequire('WAWebContactProfilePicThumbBridge');
+            const bridge = unwrapModule(rawBridge);
+            if (bridge) {{
+                for (const fnName of ['profilePicFind', 'requestProfilePicFromServer', 'find']) {{
+                    if (typeof bridge[fnName] === 'function') {{
+                        for (const id of idCandidates) {{
+                            try {{
+                                const pic = await Promise.race([
+                                    bridge[fnName](id),
+                                    new Promise((res) => setTimeout(() => res(null), 2200))
+                                ]);
+                                const url = pickValidProfilePicUrl(pic);
+                                if (url) return url;
+                            }} catch (_) {{}}
+                        }}
+                    }}
+                }}
+            }}
+
+            // 3. Colección de contactos (propiedad propia del contacto "Me")
+            const rawContactCol = safeRequire('WAWebContactCollection');
+            const contactCol = unwrapModule(rawContactCol);
+            const cObj = contactCol && (contactCol.ContactCollection || contactCol);
+            if (cObj && typeof cObj.get === 'function') {{
+                for (const id of idCandidates) {{
+                    try {{
+                        const contact = cObj.get(id);
+                        if (contact) {{
+                            if (typeof contact.getProfilePicThumb === 'function') {{
+                                const pic = contact.getProfilePicThumb();
+                                const url = pickValidProfilePicUrl(pic);
+                                if (url) return url;
+                            }}
+                            const url = pickValidProfilePicUrl(contact.profilePicThumb);
+                            if (url) return url;
+                        }}
+                    }} catch (_) {{}}
+                }}
+            }}
+        }} catch (_) {{}}
+        return null;
+    }};
+
+    const isNonProfileButtonOrSrc = (img, src) => {{
+        if (!src) return true;
+        if (/static\.whatsapp\.net/i.test(src)) return true;
+        if (/(\/|_)meta([_-]?ai)?(\.|\/|_|\?|$)/i.test(src)) return true;
+        if (!/^https:\/\/[^/]*pps\.whatsapp\.net\//i.test(src) && !/^blob:/i.test(src)) {{
+            return true;
+        }}
+        const metaOrNavRegex = /\b(meta|ai|ia|canales|channels|comunidades|communities|estados|status|novedades|updates|assistant)\b/i;
+        const alt = (img.getAttribute && img.getAttribute('alt')) || '';
+        if (metaOrNavRegex.test(alt)) return true;
+        let cur = img;
+        for (let depth = 0; depth < 6 && cur; depth++) {{
+            if (cur.getAttribute) {{
+                const aria = cur.getAttribute('aria-label') || '';
+                const title = cur.getAttribute('title') || '';
+                const testId = cur.getAttribute('data-testid') || '';
+                if (metaOrNavRegex.test(aria) || metaOrNavRegex.test(title) || /meta|ai|status|channel|communit/i.test(testId)) {{
+                    return true;
+                }}
+            }}
+            cur = cur.parentElement;
+        }}
+        return false;
+    }};
+
     const findProfileAvatarImg = () => {{
-        const isAvatarCandidate = (img, checkCornerBounds = false) => {{
+        const isAvatarCandidate = (img) => {{
             if (!img || !img.tagName || img.tagName.toUpperCase() !== 'IMG') return false;
             if (img.closest && (img.closest('#pane-side') || img.closest('#main'))) return false;
             if (!img.complete || img.naturalWidth < 24 || img.naturalHeight < 24) return false;
             if (!document.hidden) {{
                 if (!isElementVisible(img)) return false;
                 const rect = img.getBoundingClientRect();
-                if (rect.width < 20 || rect.height < 20) return false;
-                if (checkCornerBounds && (rect.left >= 100 || rect.width > 72)) return false;
-            }} else if (checkCornerBounds) {{
-                const rect = img.getBoundingClientRect();
-                if (rect.width > 0 && (rect.left >= 100 || rect.width < 20 || rect.width > 72)) return false;
+                if (rect.width < 20 || rect.height < 20 || rect.width > 96) return false;
             }}
             const src = img.currentSrc || img.src || '';
-            return Boolean(src);
+            if (isNonProfileButtonOrSrc(img, src)) return false;
+            return true;
         }};
 
-        const selectors = [
+        const prioritySelectors = [
             '[data-testid="menu-bar-profile"] img',
-            '[aria-label*="Perfil" i] img, [aria-label*="Profile" i] img',
-            '#side header img',
-            'header img[src*="pps.whatsapp.net"], header img[src*="whatsapp.net"], header img[src*="fbcdn.net"], header img[src^="blob:"], header img[src^="data:image/"], nav img[src*="pps.whatsapp.net"], nav img[src*="whatsapp.net"], nav img[src*="fbcdn.net"], nav img[src^="blob:"], nav img[src^="data:image/"]'
+            '[aria-label*="Perfil" i] img, [aria-label*="Profile" i] img'
         ];
 
-        for (const selector of selectors) {{
+        for (const selector of prioritySelectors) {{
             const nodes = document.querySelectorAll(selector);
             for (const img of nodes) {{
-                if (!isAvatarCandidate(img, false)) continue;
+                if (!isAvatarCandidate(img)) continue;
                 const src = img.currentSrc || img.src || '';
                 return {{ img, src }};
             }}
         }}
 
-        const fallbackImgs = document.querySelectorAll('img[src*="pps.whatsapp.net"], img[src*="whatsapp.net"], img[src*="fbcdn.net"], img[src^="blob:"], img[src^="data:image/"]');
-        for (const img of fallbackImgs) {{
-            if (!isAvatarCandidate(img, true)) continue;
-            const src = img.currentSrc || img.src || '';
-            return {{ img, src }};
+        const navImgs = Array.from(
+            document.querySelectorAll('header img[src*="pps.whatsapp.net"], header img[src^="blob:"], nav img[src*="pps.whatsapp.net"], nav img[src^="blob:"]')
+        ).filter(isAvatarCandidate);
+
+        if (navImgs.length > 0) {{
+            // El botón de perfil en el panel lateral moderno está en la parte inferior del rail
+            navImgs.sort((a, b) => b.getBoundingClientRect().top - a.getBoundingClientRect().top);
+            const chosen = navImgs[0];
+            return {{ img: chosen, src: chosen.currentSrc || chosen.src || '' }};
         }}
+
         return null;
     }};
 
@@ -665,15 +819,28 @@ pub fn build_init_script(session_id: &str) -> String {
         if (avatarExtracting) return;
         if (!isWhatsappHost(location.hostname)) return;
 
-        const found = findProfileAvatarImg();
-        if (!found) return;
-
-        const {{ img, src }} = found;
-        const sig = src + '|' + img.naturalWidth + 'x' + img.naturalHeight;
-        if (sig === lastAvatarSig) return;
-
         avatarExtracting = true;
         try {{
+            // 1. Fuente primaria oficial (WhatsApp Web internal store, igual que whatsapp-web.js / WA-JS)
+            const storeUrl = await getAvatarFromWhatsAppStore();
+            if (storeUrl) {{
+                if (storeUrl === lastAvatarSig) return;
+                await invokeCmdStrict('report_session_avatar', {{
+                    sessionId: SESSION_ID,
+                    avatarDataUrl: storeUrl
+                }});
+                lastAvatarSig = storeUrl;
+                return;
+            }}
+
+            // 2. Respaldo estricto por DOM (solo pps.whatsapp.net / blob, excluyendo Meta AI)
+            const found = findProfileAvatarImg();
+            if (!found) return;
+
+            const {{ img, src }} = found;
+            const sig = src + '|' + img.naturalWidth + 'x' + img.naturalHeight;
+            if (sig === lastAvatarSig) return;
+
             let avatarPayload = null;
             try {{
                 avatarPayload = renderAvatarToDataUrl(img);
@@ -702,7 +869,7 @@ pub fn build_init_script(session_id: &str) -> String {
                 lastAvatarSig = sig;
             }}
         }} catch (_) {{
-            // Reintentar en el próximo ciclo si la imagen aún carga o hay error transitorio
+            // Reintentar en el próximo ciclo si la sesión aún se está inicializando
         }} finally {{
             avatarExtracting = false;
         }}
