@@ -2875,7 +2875,7 @@ fn estimated_height(message: &Message, width: f32, new_day: bool, notices: usize
         Content::Document { caption, .. } => 70.0 + caption_rows(caption),
         Content::Sticker { .. } => 140.0,
         Content::Audio { .. } => 60.0,
-        Content::DisappearingTimer { .. } => 0.0,
+        Content::DisappearingTimer { .. } | Content::GroupEvent { .. } => 0.0,
         _ => 40.0,
     };
     // Bubble padding, the sender line, and the row spacing, plus the date
@@ -4924,7 +4924,11 @@ fn unread_divider_message(messages: &[Message], count: u32) -> Option<&Message> 
     messages
         .iter()
         .rev()
-        .filter(|message| !message.from_me && !crate::model::local_message_id(&message.id))
+        .filter(|message| {
+            !message.from_me
+                && !crate::model::local_message_id(&message.id)
+                && !message.content.is_system_notice()
+        })
         .nth(count.saturating_sub(1) as usize)
 }
 
@@ -4947,6 +4951,223 @@ fn timer_notice(
         .inner
 }
 
+/// Joins resolved participant names with localized "and".
+fn join_member_names(locale: crate::i18n::Locale, names: &[String]) -> String {
+    match names {
+        [] => String::new(),
+        [only] => only.clone(),
+        [a, b] => crate::i18n::gettext(locale, "{a} and {b}")
+            .replace("{a}", a)
+            .replace("{b}", b),
+        [head @ .., last] => crate::i18n::gettext(locale, "{a} and {b}")
+            .replace("{a}", &head.join(", "))
+            .replace("{b}", last),
+    }
+}
+
+/// Formats a group membership or admin role update for display in the chat transcript.
+fn format_group_event(
+    view: &View<'_>,
+    message: &Message,
+    kind: crate::model::GroupEventKind,
+    members: &[crate::model::GroupMemberRef],
+) -> String {
+    use crate::i18n::{gettext, pgettext};
+    use crate::model::GroupEventKind;
+
+    let locale = view.locale;
+    let you = gettext(locale, "You").into_owned();
+    let actor_is_me =
+        message.from_me || (!message.sender.is_empty() && view.me == Some(message.sender.as_str()));
+    let actor = if actor_is_me {
+        Some(you.clone())
+    } else if !message.sender.is_empty() {
+        Some((view.names_or)(
+            &message.sender,
+            message.sender_name.as_deref(),
+        ))
+    } else {
+        None
+    };
+
+    let target_is_me = |id: &str| view.me == Some(id);
+    let targets: Vec<String> = members
+        .iter()
+        .map(|member| {
+            if target_is_me(&member.id) {
+                you.clone()
+            } else {
+                (view.names_or)(&member.id, member.name.as_deref())
+            }
+        })
+        .collect();
+    let single_target_is_me = members.len() == 1 && target_is_me(&members[0].id);
+    let plural = targets.len() > 1;
+    let joined = join_member_names(locale, &targets);
+
+    match kind {
+        GroupEventKind::Added => {
+            if let Some(actor_name) = actor {
+                if actor_is_me && !targets.is_empty() {
+                    gettext(locale, "You added {members}")
+                        .replace("{members}", &joined)
+                } else if single_target_is_me {
+                    gettext(locale, "{actor} added you")
+                        .replace("{actor}", &actor_name)
+                } else if !targets.is_empty() {
+                    gettext(locale, "{actor} added {members}")
+                        .replace("{actor}", &actor_name)
+                        .replace("{members}", &joined)
+                } else {
+                    gettext(locale, "A member was added").into_owned()
+                }
+            } else if single_target_is_me {
+                gettext(locale, "You were added").into_owned()
+            } else if plural {
+                gettext(locale, "{members} were added").replace("{members}", &joined)
+            } else if !targets.is_empty() {
+                gettext(locale, "{members} was added").replace("{members}", &joined)
+            } else {
+                gettext(locale, "A member was added").into_owned()
+            }
+        }
+        GroupEventKind::Removed => {
+            if let Some(actor_name) = actor {
+                if actor_is_me && !targets.is_empty() {
+                    gettext(locale, "You removed {members}")
+                        .replace("{members}", &joined)
+                } else if single_target_is_me {
+                    gettext(locale, "{actor} removed you")
+                        .replace("{actor}", &actor_name)
+                } else if !targets.is_empty() {
+                    gettext(locale, "{actor} removed {members}")
+                        .replace("{actor}", &actor_name)
+                        .replace("{members}", &joined)
+                } else {
+                    gettext(locale, "A member was removed").into_owned()
+                }
+            } else if single_target_is_me {
+                gettext(locale, "You were removed").into_owned()
+            } else if plural {
+                gettext(locale, "{members} were removed").replace("{members}", &joined)
+            } else if !targets.is_empty() {
+                gettext(locale, "{members} was removed").replace("{members}", &joined)
+            } else {
+                gettext(locale, "A member was removed").into_owned()
+            }
+        }
+        GroupEventKind::Left => {
+            if single_target_is_me || (targets.is_empty() && actor_is_me) {
+                gettext(locale, "You left").into_owned()
+            } else if !targets.is_empty() {
+                let template = if plural {
+                    pgettext(locale, "group_event_plural", "{members} left")
+                } else {
+                    gettext(locale, "{members} left")
+                };
+                template.replace("{members}", &joined)
+            } else if let Some(actor_name) = actor {
+                gettext(locale, "{members} left").replace("{members}", &actor_name)
+            } else {
+                gettext(locale, "A member left").into_owned()
+            }
+        }
+        GroupEventKind::Joined => {
+            if single_target_is_me || (targets.is_empty() && actor_is_me) {
+                gettext(locale, "You joined the group").into_owned()
+            } else if !targets.is_empty() {
+                let template = if plural {
+                    pgettext(locale, "group_event_plural", "{members} joined the group")
+                } else {
+                    gettext(locale, "{members} joined the group")
+                };
+                template.replace("{members}", &joined)
+            } else if let Some(actor_name) = actor {
+                gettext(locale, "{members} joined the group").replace("{members}", &actor_name)
+            } else {
+                gettext(locale, "A member joined the group").into_owned()
+            }
+        }
+        GroupEventKind::JoinedViaInvite => {
+            if single_target_is_me || (targets.is_empty() && actor_is_me) {
+                gettext(locale, "You joined using this group's invite link").into_owned()
+            } else if !targets.is_empty() {
+                let template = if plural {
+                    pgettext(
+                        locale,
+                        "group_event_plural",
+                        "{members} joined using this group's invite link",
+                    )
+                } else {
+                    gettext(locale, "{members} joined using this group's invite link")
+                };
+                template.replace("{members}", &joined)
+            } else if let Some(actor_name) = actor {
+                gettext(locale, "{members} joined using this group's invite link")
+                    .replace("{members}", &actor_name)
+            } else {
+                gettext(locale, "A member joined using this group's invite link").into_owned()
+            }
+        }
+        GroupEventKind::JoinedCommunity => {
+            if single_target_is_me || (targets.is_empty() && actor_is_me) {
+                gettext(locale, "You joined from the community").into_owned()
+            } else if !targets.is_empty() {
+                let template = if plural {
+                    pgettext(
+                        locale,
+                        "group_event_plural",
+                        "{members} joined from the community",
+                    )
+                } else {
+                    gettext(locale, "{members} joined from the community")
+                };
+                template.replace("{members}", &joined)
+            } else if let Some(actor_name) = actor {
+                gettext(locale, "{members} joined from the community")
+                    .replace("{members}", &actor_name)
+            } else {
+                gettext(locale, "A member joined from the community").into_owned()
+            }
+        }
+        GroupEventKind::Promoted => {
+            if single_target_is_me {
+                gettext(locale, "You're now an admin").into_owned()
+            } else if plural {
+                gettext(locale, "{members} are now admins").replace("{members}", &joined)
+            } else if !targets.is_empty() {
+                gettext(locale, "{members} is now an admin").replace("{members}", &joined)
+            } else {
+                gettext(locale, "Group admins updated").into_owned()
+            }
+        }
+        GroupEventKind::Demoted => {
+            if single_target_is_me {
+                gettext(locale, "You're no longer an admin").into_owned()
+            } else if plural {
+                gettext(locale, "{members} are no longer admins").replace("{members}", &joined)
+            } else if !targets.is_empty() {
+                gettext(locale, "{members} is no longer an admin").replace("{members}", &joined)
+            } else {
+                gettext(locale, "Group admins updated").into_owned()
+            }
+        }
+    }
+}
+
+/// The system row a group membership or admin update leaves in the transcript.
+fn group_event_notice(
+    ui: &mut egui::Ui,
+    view: &View<'_>,
+    message: &Message,
+    kind: crate::model::GroupEventKind,
+    members: &[crate::model::GroupMemberRef],
+) -> egui::Response {
+    let text = format_group_event(view, message, kind, members);
+    ui.vertical_centered(|ui| widgets::chip(ui, &view.palette, &text))
+        .inner
+}
+
 /// Draws a message row and returns its bubble response for scrolling.
 fn bubble(
     ui: &mut egui::Ui,
@@ -4956,10 +5177,13 @@ fn bubble(
     place: RunPlace,
     actions: &mut Vec<Action>,
 ) -> Option<egui::Response> {
-    // A timer change is a system row, not a message: a centred chip naming
-    // who changed it and to what, with no bubble, avatar, or selection.
+    // A timer or group membership change is a system row, not a message: a
+    // centred chip with no bubble, avatar, or selection.
     if let Content::DisappearingTimer { seconds } = &message.content {
         return Some(timer_notice(ui, view, message, *seconds));
+    }
+    if let Content::GroupEvent { event, members } = &message.content {
+        return Some(group_event_notice(ui, view, message, *event, members));
     }
     let RunPlace {
         show_sender,
@@ -5622,8 +5846,8 @@ fn last_bubble_of_run(palette: &Palette, messages: &[Message], index: usize) -> 
 /// Whether `next` continues the run `message` belongs to: the same side,
 /// and in a group the same sender.
 fn same_run(message: &Message, next: &Message) -> bool {
-    !matches!(message.content, Content::DisappearingTimer { .. })
-        && !matches!(next.content, Content::DisappearingTimer { .. })
+    !message.content.is_system_notice()
+        && !next.content.is_system_notice()
         && message.from_me == next.from_me
         && (message.from_me || message.sender == next.sender)
 }
@@ -7308,7 +7532,9 @@ fn selection_can_revoke(messages: &[Message], selected: &[String], now: i64) -> 
             if !message.from_me
                 || matches!(
                     message.content,
-                    Content::Revoked | Content::DisappearingTimer { .. }
+                    Content::Revoked
+                    | Content::DisappearingTimer { .. }
+                    | Content::GroupEvent { .. }
                 )
                 || now - message.timestamp > crate::app::REVOKE_WINDOW.as_secs() as i64
             {
@@ -8832,7 +9058,7 @@ fn content(
             );
             None
         }
-        Content::DisappearingTimer { .. } => {
+        Content::DisappearingTimer { .. } | Content::GroupEvent { .. } => {
             // Drawn as a centred system row by `bubble`, which returns before
             // the bubble is built. This arm only keeps the match exhaustive.
             None
@@ -12613,6 +12839,131 @@ mod tests {
                 assert!(last_bubble_of_run(&palette, &rows, 2));
             }
         }
+    }
+
+    #[test]
+    fn group_event_notices_format_and_break_message_runs() {
+        use crate::model::{GroupEventKind, GroupMemberRef};
+
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        with_still_view(|view| {
+            let spanish = View {
+                locale: crate::i18n::Locale::Spanish,
+                me: Some("me@s.whatsapp.net"),
+                ..*view
+            };
+
+            let mut msg = message(Content::GroupEvent {
+                event: GroupEventKind::Added,
+                members: vec![GroupMemberRef {
+                    id: "2@s.whatsapp.net".into(),
+                    name: Some("Ana".into()),
+                }],
+            });
+            msg.from_me = false;
+            msg.sender = "1@s.whatsapp.net".into();
+            msg.sender_name = Some("Carlos".into());
+
+            let english = View {
+                locale: crate::i18n::Locale::English,
+                me: Some("me@s.whatsapp.net"),
+                ..*view
+            };
+            assert_eq!(
+                format_group_event(&spanish, &msg, GroupEventKind::Added, &[GroupMemberRef {
+                    id: "2@s.whatsapp.net".into(),
+                    name: Some("Ana".into()),
+                }]),
+                "~Carlos añadió a ~Ana"
+            );
+            assert_eq!(
+                format_group_event(&english, &msg, GroupEventKind::Added, &[GroupMemberRef {
+                    id: "2@s.whatsapp.net".into(),
+                    name: Some("Ana".into()),
+                }]),
+                "~Carlos added ~Ana"
+            );
+
+            // Leaving member (singular vs plural in Spanish).
+            msg.sender.clear();
+            let one_left = [GroupMemberRef {
+                id: "2@s.whatsapp.net".into(),
+                name: Some("Ana".into()),
+            }];
+            let two_left = [
+                GroupMemberRef {
+                    id: "2@s.whatsapp.net".into(),
+                    name: Some("Ana".into()),
+                },
+                GroupMemberRef {
+                    id: "3@s.whatsapp.net".into(),
+                    name: Some("Luis".into()),
+                },
+            ];
+            assert_eq!(
+                format_group_event(&spanish, &msg, GroupEventKind::Left, &one_left),
+                "~Ana salió del grupo"
+            );
+            assert_eq!(
+                format_group_event(&spanish, &msg, GroupEventKind::Left, &two_left),
+                "~Ana y ~Luis salieron del grupo"
+            );
+            assert_eq!(
+                format_group_event(&english, &msg, GroupEventKind::Left, &two_left),
+                "~Ana and ~Luis left"
+            );
+            assert_eq!(
+                format_group_event(&spanish, &msg, GroupEventKind::JoinedViaInvite, &one_left),
+                "~Ana se unió usando el enlace de invitación del grupo"
+            );
+            let me_removed = [GroupMemberRef {
+                id: "me@s.whatsapp.net".into(),
+                name: None,
+            }];
+            msg.sender = "1@s.whatsapp.net".into();
+            assert_eq!(
+                format_group_event(&spanish, &msg, GroupEventKind::Removed, &me_removed),
+                "~Carlos te eliminó"
+            );
+            assert_eq!(
+                format_group_event(&english, &msg, GroupEventKind::Removed, &me_removed),
+                "~Carlos removed you"
+            );
+
+            let text = message(Content::text("Hola"));
+            assert!(!same_run(&text, &msg));
+            assert!(!same_run(&msg, &text));
+
+            let mut actions = Vec::new();
+            let mut rendered = false;
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(600.0, 300.0))),
+                    ..Default::default()
+                },
+                |ui| {
+                    let response = bubble(
+                        ui,
+                        &spanish,
+                        &msg,
+                        None,
+                        RunPlace {
+                            show_sender: false,
+                            show_avatar: false,
+                            tailed: false,
+                        },
+                        &mut actions,
+                    )
+                    .expect("group notice needs a navigation response");
+                    assert!(response.rect.is_positive());
+                    assert!(!response.sense.senses_click());
+                    rendered = true;
+                },
+            );
+            output.textures_delta.clear();
+            assert!(rendered);
+        });
     }
 
     #[test]

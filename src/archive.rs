@@ -928,7 +928,11 @@ impl Archive {
     fn latest_real_message_timestamp(&self, id: &str, through: i64) -> Result<Option<i64>> {
         self.connection.query_row(
             "SELECT MAX(timestamp) FROM messages
-                 WHERE chat = ?1 AND id NOT LIKE 'zapfast-timer-%' AND timestamp <= ?2",
+                 WHERE chat = ?1
+                 AND id NOT LIKE 'zapfast-timer-%'
+                 AND id NOT LIKE 'zapfast-group-%'
+                 AND json_extract(content, '$.kind') != 'group_event'
+                 AND timestamp <= ?2",
             params![id, through],
             |row| row.get(0),
         )
@@ -940,7 +944,10 @@ impl Archive {
         self.connection.execute(
             "UPDATE chats SET read_through = MAX(COALESCE(read_through, 0), ?2),
              unread = MIN(unread, (SELECT COUNT(*) FROM messages
-                 WHERE chat = ?1 AND from_me = 0 AND id NOT LIKE 'zapfast-timer-%'
+                 WHERE chat = ?1 AND from_me = 0
+                 AND id NOT LIKE 'zapfast-timer-%'
+                 AND id NOT LIKE 'zapfast-group-%'
+                 AND json_extract(content, '$.kind') != 'group_event'
                  AND timestamp > MAX(COALESCE(read_through, 0), ?2))) WHERE id = ?1",
             params![id, timestamp],
         )?;
@@ -956,7 +963,10 @@ impl Archive {
                  (SELECT timestamp FROM messages WHERE chat = ?1 AND id = ?2)),
              unread = MIN(unread, (SELECT COUNT(*) FROM messages m
                  JOIN messages boundary ON boundary.chat = m.chat AND boundary.id = ?2
-                 WHERE m.chat = ?1 AND m.from_me = 0 AND m.id NOT LIKE 'zapfast-timer-%'
+                 WHERE m.chat = ?1 AND m.from_me = 0
+                 AND m.id NOT LIKE 'zapfast-timer-%'
+                 AND m.id NOT LIKE 'zapfast-group-%'
+                 AND json_extract(m.content, '$.kind') != 'group_event'
                  AND (m.timestamp > boundary.timestamp
                       OR (m.timestamp = boundary.timestamp AND
                           (COALESCE(m.history_order, 9223372036854775807), m.rowid) >
@@ -1008,7 +1018,10 @@ impl Archive {
         };
         let remaining: u32 = self.connection.query_row(
             "SELECT COUNT(*) FROM messages WHERE chat = ?1 AND from_me = 0
-             AND id NOT LIKE 'zapfast-timer-%' AND timestamp > ?2",
+             AND id NOT LIKE 'zapfast-timer-%'
+             AND id NOT LIKE 'zapfast-group-%'
+             AND json_extract(content, '$.kind') != 'group_event'
+             AND timestamp > ?2",
             params![id, through],
             |row| row.get(0),
         )?;
@@ -1113,7 +1126,10 @@ impl Archive {
     pub fn unread_incoming(&self, chat: &str, limit: u32) -> Result<Vec<(String, String)>> {
         let mut statement = self.connection.prepare(
             "SELECT id, sender FROM messages WHERE chat = ?1 AND from_me = 0
-             AND id NOT LIKE 'zapfast-call-%' AND id NOT LIKE 'zapfast-timer-%'
+             AND id NOT LIKE 'zapfast-call-%'
+             AND id NOT LIKE 'zapfast-timer-%'
+             AND id NOT LIKE 'zapfast-group-%'
+             AND json_extract(content, '$.kind') != 'group_event'
              AND timestamp >= COALESCE((SELECT read_through FROM chats WHERE id = ?1), -1)
              ORDER BY timestamp DESC, COALESCE(history_order, 9223372036854775807) DESC, rowid DESC LIMIT ?2",
         )?;
@@ -1808,7 +1824,7 @@ impl Archive {
              FROM messages
              WHERE chat = ?1 AND timestamp >= ?2 AND timestamp < ?3
              AND json_valid(content)
-             AND json_extract(content, '$.kind') != 'disappearing_timer'
+             AND json_extract(content, '$.kind') NOT IN ('disappearing_timer', 'group_event')
              AND (?4 IS NULL OR {SEARCHED_TEXT} LIKE ?4 ESCAPE '\\')
              ORDER BY timestamp DESC, COALESCE(history_order, 9223372036854775807) DESC, rowid DESC
              LIMIT ?5"
@@ -2324,7 +2340,10 @@ impl Archive {
             )?;
             self.connection.execute(
                 "UPDATE chats SET unread = MIN(unread, (SELECT COUNT(*) FROM messages
-                    WHERE chat = ?1 AND from_me = 0 AND id NOT LIKE 'zapfast-timer-%'
+                    WHERE chat = ?1 AND from_me = 0
+                    AND id NOT LIKE 'zapfast-timer-%'
+                    AND id NOT LIKE 'zapfast-group-%'
+                    AND json_extract(content, '$.kind') != 'group_event'
                     AND timestamp > COALESCE(read_through, 0))),
                     pending_read = CASE WHEN pending_read <= ?2 THEN NULL ELSE pending_read END
                  WHERE id = ?1",
@@ -2610,6 +2629,8 @@ impl Archive {
         let mut statement = self.connection.prepare(
             "SELECT id, mentions FROM messages WHERE chat = ?1 AND from_me = 0
              AND id NOT LIKE 'zapfast-timer-%'
+             AND id NOT LIKE 'zapfast-group-%'
+             AND json_extract(content, '$.kind') != 'group_event'
              ORDER BY timestamp DESC, COALESCE(history_order, 9223372036854775807) DESC,
                       rowid DESC
              LIMIT ?2",
@@ -2674,7 +2695,9 @@ impl Archive {
             .connection
             .query_row(
                 "SELECT id FROM messages WHERE chat = ?1
-                 AND id NOT LIKE 'zapfast-call-%' AND id NOT LIKE 'zapfast-timer-%'
+                 AND id NOT LIKE 'zapfast-call-%'
+                 AND id NOT LIKE 'zapfast-timer-%'
+                 AND id NOT LIKE 'zapfast-group-%'
                  ORDER BY timestamp ASC, COALESCE(history_order, 9223372036854775807) ASC, rowid ASC LIMIT 1",
                 params![chat],
                 |row| row.get(0),
@@ -4338,6 +4361,44 @@ pub(crate) mod tests {
         archive.bump_unread(chat).expect("bump");
         archive.mark_read_through(chat, 100).expect("read through");
         assert_eq!(archive.chat(chat).expect("chat").expect("exists").unread, 0);
+    }
+
+    #[test]
+    fn group_event_notice_round_trips_and_stays_out_of_search_and_unread() {
+        let archive = Archive::in_memory().expect("opens");
+        let chat = "123@g.us";
+        archive.ensure_chat(chat, "Group").expect("chat");
+        archive
+            .insert_message(&message(chat, "real", 100, false), None)
+            .expect("real");
+        let mut notice = message(chat, &format!("{}1", crate::model::GROUP_NOTICE_PREFIX), 200, false);
+        notice.content = Content::GroupEvent {
+            event: crate::model::GroupEventKind::Added,
+            members: vec![crate::model::GroupMemberRef {
+                id: "2@s.whatsapp.net".into(),
+                name: Some("Ana".into()),
+            }],
+        };
+        archive.insert_message(&notice, None).expect("notice");
+
+        let loaded = archive
+            .message(chat, &notice.id)
+            .expect("reads")
+            .expect("exists");
+        assert_eq!(loaded.content, notice.content);
+        assert!(archive.search_messages("Ana", 10).expect("search").is_empty());
+        let found: Vec<String> = archive
+            .search_chat_messages(chat, "", Some(0), Some(300), 10)
+            .expect("date search")
+            .into_iter()
+            .map(|m| m.id)
+            .collect();
+        assert_eq!(found, vec!["real"]);
+        archive.mark_read(chat).expect("read");
+        assert_eq!(archive.read_through(chat).expect("read_through"), Some(100));
+        archive.bump_unread(chat).expect("bump");
+        archive.mark_read_to(chat, "real").expect("read_to");
+        assert_eq!(archive.chat(chat).expect("chat").unwrap().unread, 0);
     }
 
     /// An archive from before group editing learns who may edit a group's

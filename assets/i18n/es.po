@@ -4623,3 +4623,169 @@ msgstr "Fuerza una búsqueda inmediata en GitHub Releases (actual: v{version})."
 msgid "Supp {version} is up to date"
 msgstr "Supp {version} está actualizado"
 
+msgid "Member added"
+msgstr "Miembro añadido"
+
+msgid "Member removed"
+msgstr "Miembro eliminado"
+
+msgid "Member left"
+msgstr "Un miembro salió"
+
+msgid "Member joined"
+msgstr "Un miembro se unió"
+
+msgid "Joined via invite link"
+msgstr "Se unió por enlace de invitación"
+
+msgid "Joined from community"
+msgstr "Se unió desde la comunidad"
+
+msgid "Group admin added"
+msgstr "Admin. del grupo añadido"
+
+msgid "Group admin removed"
+msgstr "Admin. del grupo eliminado"
+
+#, rust-format
+msgid "{a} and {b}"
+msgstr "{a} y {b}"
+
+#, rust-format
+msgid "You added {members}"
+msgstr "Añadiste a {members}"
+
+#, rust-format
+msgid "{actor} added you"
+msgstr "{actor} te añadió"
+
+#, rust-format
+msgid "{actor} added {members}"
+msgstr "{actor} añadió a {members}"
+
+msgid "You were added"
+msgstr "Te añadieron"
+
+#, rust-format
+msgid "{members} was added"
+msgstr "Se añadió a {members}"
+
+#, rust-format
+msgid "{members} were added"
+msgstr "Fueron añadidos {members}"
+
+msgid "A member was added"
+msgstr "Se añadió a un miembro"
+
+#, rust-format
+msgid "You removed {members}"
+msgstr "Eliminaste a {members}"
+
+#, rust-format
+msgid "{actor} removed you"
+msgstr "{actor} te eliminó"
+
+#, rust-format
+msgid "{actor} removed {members}"
+msgstr "{actor} eliminó a {members}"
+
+msgid "You were removed"
+msgstr "Te eliminaron del grupo"
+
+#, rust-format
+msgid "{members} was removed"
+msgstr "Se eliminó a {members}"
+
+#, rust-format
+msgid "{members} were removed"
+msgstr "Fueron eliminados {members}"
+
+msgid "A member was removed"
+msgstr "Se eliminó a un miembro"
+
+msgid "You left"
+msgstr "Saliste del grupo"
+
+#, rust-format
+msgid "{members} left"
+msgstr "{members} salió del grupo"
+
+msgctxt "group_event_plural"
+#, rust-format
+msgid "{members} left"
+msgstr "{members} salieron del grupo"
+
+msgid "A member left"
+msgstr "Un miembro salió del grupo"
+
+msgid "You joined the group"
+msgstr "Te uniste al grupo"
+
+#, rust-format
+msgid "{members} joined the group"
+msgstr "{members} se unió al grupo"
+
+msgctxt "group_event_plural"
+#, rust-format
+msgid "{members} joined the group"
+msgstr "{members} se unieron al grupo"
+
+msgid "A member joined the group"
+msgstr "Un miembro se unió al grupo"
+
+msgid "You joined using this group's invite link"
+msgstr "Te uniste usando el enlace de invitación del grupo"
+
+#, rust-format
+msgid "{members} joined using this group's invite link"
+msgstr "{members} se unió usando el enlace de invitación del grupo"
+
+msgctxt "group_event_plural"
+#, rust-format
+msgid "{members} joined using this group's invite link"
+msgstr "{members} se unieron usando el enlace de invitación del grupo"
+
+msgid "A member joined using this group's invite link"
+msgstr "Un miembro se unió usando el enlace de invitación del grupo"
+
+msgid "You joined from the community"
+msgstr "Te uniste desde la comunidad"
+
+#, rust-format
+msgid "{members} joined from the community"
+msgstr "{members} se unió desde la comunidad"
+
+msgctxt "group_event_plural"
+#, rust-format
+msgid "{members} joined from the community"
+msgstr "{members} se unieron desde la comunidad"
+
+msgid "A member joined from the community"
+msgstr "Un miembro se unió desde la comunidad"
+
+msgid "You're now an admin"
+msgstr "Ahora eres administrador/a"
+
+#, rust-format
+msgid "{members} is now an admin"
+msgstr "{members} ahora es administrador/a"
+
+#, rust-format
+msgid "{members} are now admins"
+msgstr "{members} ahora son administradores"
+
+msgid "Group admins updated"
+msgstr "Administradores del grupo actualizados"
+
+msgid "You're no longer an admin"
+msgstr "Ya no eres administrador/a"
+
+#, rust-format
+msgid "{members} is no longer an admin"
+msgstr "{members} ya no es administrador/a"
+
+#, rust-format
+msgid "{members} are no longer admins"
+msgstr "{members} ya no son administradores"
+
+

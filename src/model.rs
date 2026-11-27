@@ -637,7 +637,7 @@ impl Message {
     /// disappearing-timer notice is filed under an id it never issued. Neither
     /// may be named in a message range sent to the phone.
     pub fn known_to_phone(&self) -> bool {
-        !timer_notice_id(&self.id)
+        !system_notice_id(&self.id)
             && !(self.from_me && matches!(self.status, Delivery::Pending | Delivery::Failed))
     }
 
@@ -895,6 +895,13 @@ pub enum Content {
         /// The new duration in seconds; `0` means the timer was turned off.
         seconds: u32,
     },
+    /// A group membership or role update, drawn as a centred system row.
+    #[serde(rename = "group_event")]
+    GroupEvent {
+        event: GroupEventKind,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        members: Vec<GroupMemberRef>,
+    },
     /// Unsupported content with a user-facing description.
     Unsupported {
         what: String,
@@ -948,16 +955,52 @@ pub const CALL_LINK_CHAT: &str = "zapfast-call-link";
 /// setting changes. They are local system rows, never sent anywhere.
 pub const TIMER_NOTICE_PREFIX: &str = "zapfast-timer-";
 
+/// The id prefix of the group membership/role notices Supp files from live
+/// group notifications. They are local system rows, never sent anywhere.
+pub const GROUP_NOTICE_PREFIX: &str = "zapfast-group-";
+
 /// Whether `id` is one ZapFast made up for a row of its own, which no server
-/// ever issued: a call entry, or a disappearing-timer notice. Nothing sent to
-/// WhatsApp may name such an id.
+/// ever issued: a call entry, a disappearing-timer notice, or a group notice.
+/// Nothing sent to WhatsApp may name such an id.
 pub fn local_message_id(id: &str) -> bool {
-    id.starts_with(CALL_ENTRY_PREFIX) || timer_notice_id(id)
+    id.starts_with(CALL_ENTRY_PREFIX) || system_notice_id(id)
 }
 
 /// Whether `id` names a disappearing-timer notice.
 pub fn timer_notice_id(id: &str) -> bool {
     id.starts_with(TIMER_NOTICE_PREFIX)
+}
+
+/// Whether `id` names a local group membership/role notice.
+pub fn group_notice_id(id: &str) -> bool {
+    id.starts_with(GROUP_NOTICE_PREFIX)
+}
+
+/// Whether `id` names a local system notice (timer or group event).
+pub fn system_notice_id(id: &str) -> bool {
+    timer_notice_id(id) || group_notice_id(id)
+}
+
+/// What happened to a group's membership or roles.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GroupEventKind {
+    Added,
+    Removed,
+    Left,
+    Joined,
+    JoinedViaInvite,
+    JoinedCommunity,
+    Promoted,
+    Demoted,
+}
+
+/// A participant named by a group system notice.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GroupMemberRef {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 /// How far apart, in seconds, two entries for one call may be: the phone's
@@ -1376,6 +1419,9 @@ impl Content {
         if let Self::DisappearingTimer { seconds } = self {
             return disappearing_summary(locale, *seconds);
         }
+        if let Self::GroupEvent { event, .. } = self {
+            return group_event_summary(locale, *event);
+        }
         let summary = self.summary();
         if self.labelled() {
             localized_summary(locale, &summary).into_owned()
@@ -1386,7 +1432,10 @@ impl Content {
 
     /// [`Self::full_summary`] with its content label in `locale`.
     pub fn full_summary_in(&self, locale: crate::i18n::Locale) -> String {
-        if matches!(self, Self::DisappearingTimer { .. }) {
+        if matches!(
+            self,
+            Self::DisappearingTimer { .. } | Self::GroupEvent { .. }
+        ) {
             return self.summary_in(locale);
         }
         let summary = self.full_summary();
@@ -1441,6 +1490,9 @@ impl Content {
                 crate::util::disappearing_line(crate::i18n::Locale::English, Some(*seconds))
                     .unwrap_or_else(|| "Disappearing messages changed".to_owned())
             }
+            Self::GroupEvent { event, .. } => {
+                group_event_summary(crate::i18n::Locale::English, *event)
+            }
             Self::Revoked => "This message was deleted".to_owned(),
             Self::Unsupported { what } => format!("Unsupported message ({what})"),
             Self::PhoneOnly {
@@ -1483,6 +1535,14 @@ impl Content {
                 }
             }
         }
+    }
+
+    /// Whether this row is a centred system notice rather than a chat bubble.
+    pub fn is_system_notice(&self) -> bool {
+        matches!(
+            self,
+            Self::DisappearingTimer { .. } | Self::GroupEvent { .. }
+        )
     }
 
     /// Whether this stands in for a message this device could not open.
@@ -1798,6 +1858,22 @@ fn disappearing_summary(locale: crate::i18n::Locale, seconds: u32) -> String {
     // A known duration always reads, so the label alone is only a fallback.
     crate::util::disappearing_line(locale, Some(seconds))
         .unwrap_or_else(|| crate::i18n::gettext(locale, "Disappearing messages").into_owned())
+}
+
+/// Short summary of a group membership/role system notice in `locale`.
+fn group_event_summary(locale: crate::i18n::Locale, kind: GroupEventKind) -> String {
+    use crate::i18n::gettext;
+    match kind {
+        GroupEventKind::Added => gettext(locale, "Member added"),
+        GroupEventKind::Removed => gettext(locale, "Member removed"),
+        GroupEventKind::Left => gettext(locale, "Member left"),
+        GroupEventKind::Joined => gettext(locale, "Member joined"),
+        GroupEventKind::JoinedViaInvite => gettext(locale, "Joined via invite link"),
+        GroupEventKind::JoinedCommunity => gettext(locale, "Joined from community"),
+        GroupEventKind::Promoted => gettext(locale, "Group admin added"),
+        GroupEventKind::Demoted => gettext(locale, "Group admin removed"),
+    }
+    .into_owned()
 }
 
 /// `summary` with the content label it starts with, such as "Photo" or

@@ -4526,6 +4526,7 @@ impl Worker {
                 {
                     self.emit_chat(&chat);
                 }
+                self.handle_group_membership_update(&chat, &update);
                 self.request_group_info(&chat, true);
             }
             E::ArchiveUpdate(update) => {
@@ -6618,7 +6619,7 @@ impl Worker {
                 } else {
                     message.sender.clone().unwrap_or_else(|| chat.id.clone())
                 };
-                let sender = if message.from_me {
+                let mut sender = if message.from_me {
                     self.me()
                 } else {
                     message
@@ -6631,6 +6632,15 @@ impl Worker {
                     && !message.from_me
                 {
                     self.remember_push_name(&sender, push_name);
+                }
+                let mut content = message.content;
+                if let Content::GroupEvent { members, .. } = &mut content {
+                    if sender == id {
+                        sender.clear();
+                    }
+                    for member in members {
+                        member.id = self.canonical_str(&member.id);
+                    }
                 }
                 let reactions = message
                     .reactions
@@ -6685,7 +6695,7 @@ impl Worker {
                     },
                     from_me: message.from_me,
                     timestamp: message.timestamp,
-                    content: message.content,
+                    content,
                     status: message.status,
                     delivered_at,
                     read_at,
@@ -10151,6 +10161,7 @@ impl Worker {
                 | Content::Poll { .. }
                 | Content::Interactive { .. }
                 | Content::DisappearingTimer { .. }
+                | Content::GroupEvent { .. }
         ) {
             self.emit(Event::Error("This message cannot be forwarded".to_owned()));
             return None;
@@ -12041,6 +12052,181 @@ impl Worker {
         });
     }
 
+    /// Files system timeline rows for group membership and admin role updates.
+    fn handle_group_membership_update(&mut self, chat: &str, update: &wa_events::GroupUpdate) {
+        use crate::model::{GROUP_NOTICE_PREFIX, GroupEventKind, GroupMemberRef};
+        use whatsapp_rust::wacore::stanza::groups::{
+            GroupNotificationAction, GroupParticipantInfo,
+        };
+
+        let timestamp = update.timestamp.timestamp();
+        let deleted = self.archive.chat(chat).ok().flatten().is_none()
+            && self.predates_removal(chat, timestamp);
+        if deleted || self.predates_removal(chat, timestamp) {
+            return;
+        }
+        if let (Some(lid), Some(pn)) = (&update.participant, &update.participant_pn) {
+            self.learn_pair(lid, pn);
+        }
+        let raw_actor = update
+            .participant_pn
+            .as_ref()
+            .or(update.participant.as_ref());
+        let actor = raw_actor.map(|jid| self.canonical(jid)).unwrap_or_default();
+        let from_me = !actor.is_empty() && actor == self.me();
+
+        let mut collect_members = |participants: &[GroupParticipantInfo]| -> Vec<GroupMemberRef> {
+            let mut seen = HashSet::new();
+            let mut out = Vec::with_capacity(participants.len());
+            for participant in participants {
+                if let (Some(lid), Some(pn)) = (&participant.lid, &participant.phone_number) {
+                    self.learn_pair(lid, pn);
+                } else if participant.jid.is_lid()
+                    && let Some(pn) = &participant.phone_number
+                {
+                    self.learn_pair(&participant.jid, pn);
+                }
+                let id = self.canonical(
+                    participant
+                        .phone_number
+                        .as_ref()
+                        .unwrap_or(&participant.jid),
+                );
+                if id.is_empty() || !seen.insert(id.clone()) {
+                    continue;
+                }
+                let name = participant
+                    .display_name
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_owned);
+                out.push(GroupMemberRef { id, name });
+            }
+            out
+        };
+
+        let (kind, members) = match &*update.action {
+            GroupNotificationAction::Add {
+                participants,
+                reason,
+                ..
+            } => {
+                let members = collect_members(participants);
+                if members.is_empty() {
+                    return;
+                }
+                let kind = match reason.as_deref() {
+                    Some("invite") => GroupEventKind::JoinedViaInvite,
+                    Some("linked_group_join") => GroupEventKind::JoinedCommunity,
+                    _ if actor.is_empty()
+                        || (members.len() == 1 && members[0].id == actor) =>
+                    {
+                        GroupEventKind::Joined
+                    }
+                    _ => GroupEventKind::Added,
+                };
+                (kind, members)
+            }
+            GroupNotificationAction::Remove { participants, .. } => {
+                let members = collect_members(participants);
+                if members.is_empty() {
+                    return;
+                }
+                let is_leave = actor.is_empty()
+                    || (members.len() == 1 && members[0].id == actor);
+                let kind = if is_leave {
+                    GroupEventKind::Left
+                } else {
+                    GroupEventKind::Removed
+                };
+                (kind, members)
+            }
+            GroupNotificationAction::Invite { .. } => {
+                if actor.is_empty() {
+                    return;
+                }
+                let name = update
+                    .notify
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_owned);
+                (
+                    GroupEventKind::JoinedViaInvite,
+                    vec![GroupMemberRef {
+                        id: actor.clone(),
+                        name,
+                    }],
+                )
+            }
+            GroupNotificationAction::Promote { participants, .. } => {
+                let members = collect_members(participants);
+                if members.is_empty() {
+                    return;
+                }
+                (GroupEventKind::Promoted, members)
+            }
+            GroupNotificationAction::Demote { participants, .. } => {
+                let members = collect_members(participants);
+                if members.is_empty() {
+                    return;
+                }
+                (GroupEventKind::Demoted, members)
+            }
+            _ => return,
+        };
+
+        self.ensure_chat(chat, None);
+        let id = match update.notification_id.as_deref() {
+            Some(notification) => {
+                format!("{GROUP_NOTICE_PREFIX}{notification}-{}", update.action_index)
+            }
+            None => format!(
+                "{GROUP_NOTICE_PREFIX}{timestamp}-{}-{kind:?}-{}",
+                update.action_index,
+                members.first().map_or("none", |m| m.id.as_str())
+            ),
+        };
+        let notice = Message {
+            id,
+            chat: chat.to_owned(),
+            sender: actor,
+            sender_name: if from_me {
+                None
+            } else {
+                update.notify.clone()
+            },
+            from_me,
+            timestamp,
+            content: Content::GroupEvent {
+                event: kind,
+                members,
+            },
+            status: Delivery::None,
+            delivered_at: None,
+            read_at: None,
+            quoted: None,
+            reactions: Vec::new(),
+            edited: false,
+            mentions: Vec::new(),
+            forwarded: false,
+            thumbnail: None,
+            history_order: None,
+        };
+        if let Err(error) = self.archive.insert_message(&notice, None) {
+            log::warn!("could not file a group membership notice: {error}");
+            return;
+        }
+        self.emit(Event::Messages {
+            chat: chat.to_owned(),
+            messages: vec![notice],
+            older: false,
+            complete: false,
+        });
+        self.emit_chat(chat);
+    }
+
     /// Dispatches a sticker with its explicit quote and returns both on refusal.
     fn send_sticker(
         &mut self,
@@ -12048,6 +12234,11 @@ impl Worker {
         path: PathBuf,
         quoting: Option<crate::model::ReplyTarget>,
     ) {
+        enum OutboundStickerAudio {
+            LocalFile(PathBuf),
+            DownloadFromArchive { raw: Vec<u8> },
+        }
+
         let quote = match self.quote_target(&chat, quoting.as_ref()) {
             Ok(quote) => quote,
             Err(reason) => {
@@ -12059,6 +12250,24 @@ impl Worker {
             self.refuse(chat, quoting, Unsent::Sticker, Refusal::Offline);
             return;
         };
+        let audio_source = match self
+            .sticker_audio_map(std::slice::from_ref(&path))
+            .remove(&path)
+        {
+            Some(crate::model::StickerAudio::Ready(audio_path)) => {
+                Some(OutboundStickerAudio::LocalFile(audio_path))
+            }
+            Some(crate::model::StickerAudio::Downloadable {
+                chat: src_chat,
+                message: src_id,
+            }) => self
+                .archive
+                .raw(&src_chat, &src_id)
+                .ok()
+                .flatten()
+                .map(|raw| OutboundStickerAudio::DownloadFromArchive { raw }),
+            None => None,
+        };
         let commands = self.commands.clone();
         let dir = self.dirs.media_cache_dir();
         let me = self.me();
@@ -12067,8 +12276,82 @@ impl Worker {
                 let bytes = tokio::fs::read(&path)
                     .await
                     .map_err(|error| error.to_string())?;
-                let prepared = prepare_sticker(&client, bytes).await?;
-                quoted_outbound(&client, &chat, &me, &dir, prepared, None, Vec::new(), quote).await
+                let audio_payload = match audio_source {
+                    Some(OutboundStickerAudio::LocalFile(audio_path)) => {
+                        let audio_bytes = tokio::fs::read(&audio_path)
+                            .await
+                            .map_err(|error| error.to_string())?;
+                        (!audio_bytes.is_empty()).then(|| {
+                            (
+                                audio_bytes,
+                                sticker_audio_mime_for_path(&audio_path).to_owned(),
+                            )
+                        })
+                    }
+                    Some(OutboundStickerAudio::DownloadFromArchive { raw }) => {
+                        let decoded = wa::Message::decode_from_slice(&raw)
+                            .map_err(|error| error.to_string())?;
+                        if let Some(audio_msg) =
+                            sticker_audio_of(unwrapped_base(decoded.get_base_message())).cloned()
+                        {
+                            let mime = audio_msg
+                                .mimetype
+                                .as_deref()
+                                .filter(|mime| !mime.trim().is_empty())
+                                .unwrap_or("audio/ogg; codecs=opus")
+                                .to_owned();
+                            tokio::fs::create_dir_all(&dir)
+                                .await
+                                .map_err(|error| error.to_string())?;
+                            let tmp_path = dir.join(format!(
+                                "sticker-send-audio-{}.tmp",
+                                rand::random::<u64>()
+                            ));
+                            let downloaded = download_attachment(
+                                &client,
+                                &audio_msg,
+                                &dir,
+                                &tmp_path,
+                                ATTACHMENT_DOWNLOAD_LIMIT,
+                            )
+                            .await;
+                            let bytes = match downloaded {
+                                Ok(written) => tokio::fs::read(&written)
+                                    .await
+                                    .map_err(|error| error.to_string()),
+                                Err(error) => Err(error),
+                            };
+                            let _ = tokio::fs::remove_file(&tmp_path).await;
+                            let audio_bytes = bytes?;
+                            (!audio_bytes.is_empty()).then_some((audio_bytes, mime))
+                        } else {
+                            None
+                        }
+                    }
+                    None => None,
+                };
+                let prepared = prepare_sticker(&client, bytes, audio_payload.as_ref()).await?;
+                let (mut row, raw) =
+                    quoted_outbound(&client, &chat, &me, &dir, prepared, None, Vec::new(), quote)
+                        .await?;
+                if let Some((audio_bytes, audio_mime)) = audio_payload {
+                    let audio_file = media_path(
+                        &dir,
+                        &chat,
+                        &format!("{}-audio", row.id),
+                        &audio_mime,
+                        None,
+                    );
+                    let _ = tokio::fs::create_dir_all(&dir).await;
+                    if tokio::fs::write(&audio_file, &audio_bytes).await.is_ok()
+                        && let Content::Sticker {
+                            audio: Some(track), ..
+                        } = &mut row.content
+                    {
+                        track.path = Some(audio_file);
+                    }
+                }
+                Ok::<_, String>((row, raw))
             }
             .await;
             match outcome {
@@ -14046,8 +14329,27 @@ async fn prepare_document(
     })
 }
 
-/// Uploads a WebP sticker and builds its message without a library builder.
-async fn prepare_sticker(client: &Client, bytes: Vec<u8>) -> Result<Prepared, String> {
+fn sticker_audio_mime_for_path(path: &Path) -> &'static str {
+    let ext = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_ascii_lowercase());
+    match ext.as_deref() {
+        Some("mp3") => "audio/mpeg",
+        Some("m4a" | "mp4") => "audio/mp4",
+        Some("aac") => "audio/aac",
+        Some("wav") => "audio/wav",
+        _ => "audio/ogg; codecs=opus",
+    }
+}
+
+/// Uploads a WebP sticker (and optional audio track) and builds its message
+/// without a library builder.
+async fn prepare_sticker(
+    client: &Client,
+    bytes: Vec<u8>,
+    audio: Option<&(Vec<u8>, String)>,
+) -> Result<Prepared, String> {
     let (animated, width, height) = tokio::task::spawn_blocking({
         let bytes = bytes.clone();
         move || {
@@ -14064,6 +14366,34 @@ async fn prepare_sticker(client: &Client, bytes: Vec<u8>) -> Result<Prepared, St
         .upload(bytes.clone(), MediaType::Sticker, UploadOptions::default())
         .await
         .map_err(|error| error.to_string())?;
+    let uploaded_audio = if let Some((audio_bytes, audio_mime)) = audio {
+        let audio_upload = client
+            .upload(
+                audio_bytes.clone(),
+                MediaType::Audio,
+                UploadOptions::default(),
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+        let mut audio_proto = wa::message::AudioMessage::default();
+        audio_proto.url = Some(audio_upload.url);
+        audio_proto.direct_path = Some(audio_upload.direct_path);
+        audio_proto.media_key = Some(audio_upload.media_key.to_vec());
+        audio_proto.file_enc_sha256 = Some(audio_upload.file_enc_sha256.to_vec());
+        audio_proto.file_sha256 = Some(audio_upload.file_sha256.to_vec());
+        audio_proto.file_length = Some(audio_upload.file_length);
+        audio_proto.mimetype = Some(audio_mime.clone());
+        audio_proto.media_key_timestamp = Some(audio_upload.media_key_timestamp);
+        audio_proto.ptt = Some(false);
+        let track = media(Some(audio_mime), Some(audio_bytes.len() as u64), None, None);
+        Some((audio_proto, track))
+    } else {
+        None
+    };
+    let (audio_proto, audio_media) = match uploaded_audio {
+        Some((proto, track)) => (Some(proto), Some(track)),
+        None => (None, None),
+    };
     let message = {
         let mut proto = wa::Message::default();
         proto.sticker_message = MessageField::some({
@@ -14079,6 +14409,11 @@ async fn prepare_sticker(client: &Client, bytes: Vec<u8>) -> Result<Prepared, St
             proto.is_animated = Some(animated);
             proto.width = Some(width);
             proto.height = Some(height);
+            if let Some(audio_proto) = audio_proto {
+                proto.audio = Some(wa::message::sticker_message::Audio::AudioMessage(
+                    Box::new(audio_proto),
+                ));
+            }
             proto
         });
         proto
@@ -14093,7 +14428,7 @@ async fn prepare_sticker(client: &Client, bytes: Vec<u8>) -> Result<Prepared, St
                 Some(height),
             ),
             animated,
-            audio: None,
+            audio: audio_media,
         },
         thumbnail: None,
         bytes,
@@ -14510,6 +14845,113 @@ pub(super) async fn file_outbound(
     Ok((row, prepared.message.encode_to_vec()))
 }
 
+/// Converts a history-sync group membership or admin stub into a system row.
+fn group_event_stub(info: &wa::WebMessageInfo) -> Option<Content> {
+    use crate::model::{GroupEventKind, GroupMemberRef};
+    use wa::web_message_info::StubType;
+
+    let kind = match info.message_stub_type? {
+        StubType::GROUP_PARTICIPANT_ADD
+        | StubType::SUB_GROUP_PARTICIPANT_ADD_RICH
+        | StubType::COMMUNITY_PARTICIPANT_ADD_RICH
+        | StubType::CAG_INVITE_AUTO_ADD => GroupEventKind::Added,
+        StubType::GROUP_PARTICIPANT_REMOVE => GroupEventKind::Removed,
+        StubType::GROUP_PARTICIPANT_LEAVE => GroupEventKind::Left,
+        StubType::GROUP_PARTICIPANT_INVITE
+        | StubType::GROUP_PARTICIPANT_ADD_REQUEST_JOIN
+        | StubType::GROUP_PARTICIPANT_ACCEPT => GroupEventKind::JoinedViaInvite,
+        StubType::GROUP_PARTICIPANT_LINKED_GROUP_JOIN
+        | StubType::GROUP_PARTICIPANT_JOINED_GROUP_AND_PARENT_GROUP
+        | StubType::CAG_INVITE_AUTO_JOINED => GroupEventKind::JoinedCommunity,
+        StubType::GROUP_PARTICIPANT_PROMOTE | StubType::COMMUNITY_PARTICIPANT_PROMOTE => {
+            GroupEventKind::Promoted
+        }
+        StubType::GROUP_PARTICIPANT_DEMOTE | StubType::COMMUNITY_PARTICIPANT_DEMOTE => {
+            GroupEventKind::Demoted
+        }
+        _ => return None,
+    };
+
+    let mut members: Vec<GroupMemberRef> = info
+        .message_stub_parameters
+        .iter()
+        .filter_map(|param| parse_stub_member(param))
+        .collect();
+    if members.is_empty()
+        && matches!(
+            kind,
+            GroupEventKind::Left
+                | GroupEventKind::Joined
+                | GroupEventKind::JoinedViaInvite
+                | GroupEventKind::JoinedCommunity
+        )
+        && let Some(actor) = info
+            .participant
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .or_else(|| {
+                info.key
+                    .as_option()
+                    .and_then(|key| key.participant.as_deref())
+                    .filter(|s| !s.trim().is_empty())
+            })
+    {
+        members.push(GroupMemberRef {
+            id: actor.to_owned(),
+            name: None,
+        });
+    }
+    Some(Content::GroupEvent {
+        event: kind,
+        members,
+    })
+}
+
+fn parse_stub_member(param: &str) -> Option<crate::model::GroupMemberRef> {
+    let trimmed = param.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed.starts_with('{') {
+        let value: serde_json::Value = serde_json::from_str(trimmed).ok()?;
+        let id = ["pn", "phone_number", "jid", "lid"]
+            .into_iter()
+            .find_map(|key| {
+                value
+                    .get(key)
+                    .and_then(|v| v.as_str())
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+            })?
+            .to_owned();
+        let name = ["displayName", "display_name", "name"]
+            .into_iter()
+            .find_map(|key| {
+                value
+                    .get(key)
+                    .and_then(|v| v.as_str())
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+            })
+            .map(str::to_owned);
+        return Some(crate::model::GroupMemberRef { id, name });
+    }
+    if trimmed.contains('@') {
+        return Some(crate::model::GroupMemberRef {
+            id: trimmed.to_owned(),
+            name: None,
+        });
+    }
+    let digits = trimmed.strip_prefix('+').unwrap_or(trimmed);
+    if !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Some(crate::model::GroupMemberRef {
+            id: format!("{digits}@s.whatsapp.net"),
+            name: None,
+        });
+    }
+    None
+}
+
 /// Decodes a history chunk off the worker thread.
 fn parse_history(compressed: &[u8]) -> Result<ParsedHistory, String> {
     let mut stream = HistorySyncStream::new(compressed, MAX_DECOMPRESSED);
@@ -14603,7 +15045,7 @@ fn parse_conversation(conversation: wa::Conversation) -> ParsedChat {
             continue;
         };
         let Some(original) = info.message.as_option() else {
-            // A missed call the phone filed as a bare notice.
+            // A missed call or group membership notice the phone filed as a bare notice.
             if let Some(content) = info.message_stub_type.and_then(calls::missed_call_stub) {
                 let from_me = key.from_me.unwrap_or(false);
                 let timestamp = info.message_timestamp.unwrap_or(0) as i64;
@@ -14611,6 +15053,39 @@ fn parse_conversation(conversation: wa::Conversation) -> ParsedChat {
                 messages.push(ParsedMessage {
                     id,
                     sender: key.participant.clone().or_else(|| key.remote_jid.clone()),
+                    from_me,
+                    push_name: None,
+                    timestamp,
+                    history_order: entry
+                        .msg_order_id
+                        .and_then(|order| i64::try_from(order).ok()),
+                    edited: false,
+                    content,
+                    status: Delivery::None,
+                    quoted: None,
+                    reactions: Vec::new(),
+                    mentions: Vec::new(),
+                    forwarded: false,
+                    thumbnail: None,
+                    raw: Vec::new(),
+                    poll_secret: None,
+                    poll_votes: Vec::new(),
+                    receipts: Vec::new(),
+                    sealed_edit: None,
+                });
+                continue;
+            }
+            if let Some(content) = group_event_stub(info) {
+                let from_me = key.from_me.unwrap_or(false);
+                let timestamp = info.message_timestamp.unwrap_or(0) as i64;
+                newest = newest.max(timestamp);
+                messages.push(ParsedMessage {
+                    id,
+                    sender: info
+                        .participant
+                        .clone()
+                        .filter(|sender| !sender.trim().is_empty())
+                        .or_else(|| key.participant.clone()),
                     from_me,
                     push_name: None,
                     timestamp,
@@ -19687,6 +20162,165 @@ mod receipt_tests {
     }
 
     #[tokio::test]
+    async fn live_group_membership_updates_file_system_notices() {
+        use whatsapp_rust::wacore::stanza::groups::{
+            GroupNotificationAction, GroupParticipantInfo,
+        };
+        let (mut worker, events, _inbox, _wa) = worker();
+        let group = "123-members@g.us";
+        let admin = "15551112222@s.whatsapp.net";
+        let target = "15553334444@s.whatsapp.net";
+
+        let make_update = |notif: &str, actor: Option<&str>, ts: i64, action: GroupNotificationAction| {
+            wa_events::GroupUpdate::builder()
+                .group_jid(group.parse().unwrap())
+                .notification_id(notif.to_owned())
+                .maybe_participant(actor.map(|jid| jid.parse().unwrap()))
+                .timestamp(whatsapp_rust::wacore::time::from_secs(ts).unwrap())
+                .is_lid_addressing_mode(false)
+                .action(Box::new(action))
+                .build()
+        };
+
+        let participant = |jid: &str, name: Option<&str>| {
+            GroupParticipantInfo::builder()
+                .jid(jid.parse().unwrap())
+                .maybe_display_name(name.map(str::to_owned))
+                .build()
+        };
+
+        // 1. Admin adds a member -> Added, and redelivery with same notification_id deduplicates.
+        let add = make_update(
+            "n-add",
+            Some(admin),
+            100,
+            GroupNotificationAction::add()
+                .participants(vec![participant(target, Some("Ana"))])
+                .build(),
+        );
+        worker
+            .handle_wa_event(Arc::new(wa_events::Event::GroupUpdate(add.clone())))
+            .await;
+        worker
+            .handle_wa_event(Arc::new(wa_events::Event::GroupUpdate(add)))
+            .await;
+
+        // 2. Member joins via invite link -> JoinedViaInvite.
+        let invite = make_update(
+            "n-invite",
+            Some(target),
+            110,
+            GroupNotificationAction::add()
+                .participants(vec![participant(target, Some("Ana"))])
+                .reason("invite".to_owned())
+                .build(),
+        );
+        worker
+            .handle_wa_event(Arc::new(wa_events::Event::GroupUpdate(invite)))
+            .await;
+
+        // 3. Member leaves on their own (actor == participant) -> Left.
+        let left = make_update(
+            "n-left",
+            Some(target),
+            120,
+            GroupNotificationAction::remove()
+                .participants(vec![participant(target, Some("Ana"))])
+                .build(),
+        );
+        worker
+            .handle_wa_event(Arc::new(wa_events::Event::GroupUpdate(left)))
+            .await;
+
+        // 4. Admin removes a member (actor != participant) -> Removed.
+        let removed = make_update(
+            "n-rem",
+            Some(admin),
+            130,
+            GroupNotificationAction::remove()
+                .participants(vec![participant(target, None)])
+                .build(),
+        );
+        worker
+            .handle_wa_event(Arc::new(wa_events::Event::GroupUpdate(removed)))
+            .await;
+
+        // 5. Promote & Demote.
+        let promote = make_update(
+            "n-promo",
+            Some(admin),
+            140,
+            GroupNotificationAction::promote()
+                .participants(vec![participant(target, None)])
+                .build(),
+        );
+        let demote = make_update(
+            "n-demo",
+            Some(admin),
+            150,
+            GroupNotificationAction::demote()
+                .participants(vec![participant(target, None)])
+                .build(),
+        );
+        worker
+            .handle_wa_event(Arc::new(wa_events::Event::GroupUpdate(promote)))
+            .await;
+        worker
+            .handle_wa_event(Arc::new(wa_events::Event::GroupUpdate(demote)))
+            .await;
+
+        let stored = worker.archive.messages(group, None, 20).unwrap();
+        assert_eq!(stored.len(), 6, "redelivered notification must deduplicate");
+        assert!(matches!(
+            &stored[0].content,
+            Content::GroupEvent {
+                event: crate::model::GroupEventKind::Added,
+                members,
+            } if stored[0].sender == admin && members.len() == 1 && members[0].id == target
+        ));
+        assert!(matches!(
+            stored[1].content,
+            Content::GroupEvent {
+                event: crate::model::GroupEventKind::JoinedViaInvite,
+                ..
+            }
+        ));
+        assert!(matches!(
+            stored[2].content,
+            Content::GroupEvent {
+                event: crate::model::GroupEventKind::Left,
+                ..
+            }
+        ));
+        assert!(matches!(
+            stored[3].content,
+            Content::GroupEvent {
+                event: crate::model::GroupEventKind::Removed,
+                ..
+            }
+        ));
+        assert!(matches!(
+            stored[4].content,
+            Content::GroupEvent {
+                event: crate::model::GroupEventKind::Promoted,
+                ..
+            }
+        ));
+        assert!(matches!(
+            stored[5].content,
+            Content::GroupEvent {
+                event: crate::model::GroupEventKind::Demoted,
+                ..
+            }
+        ));
+        assert!(events.try_iter().any(|ev| matches!(
+            ev,
+            Event::Messages { chat, messages, .. }
+            if chat == group && matches!(messages.as_slice(), [m] if matches!(m.content, Content::GroupEvent { .. }))
+        )));
+    }
+
+    #[tokio::test]
     async fn group_description_cache_survives_failed_metadata_refreshes() {
         let (mut worker, _events, _inbox, _wa) = worker();
         let group = "fixture@g.us";
@@ -21328,6 +21962,83 @@ mod receipt_tests {
         assert!(!report.contains("private-"));
         assert!(!report.contains("Private fixture body"));
         assert!(!report.contains(PEER));
+    }
+
+    #[test]
+    fn history_parses_group_membership_and_role_stubs() {
+        use wa::web_message_info::StubType;
+
+        let stub = |id: &str, stub_type: StubType, actor: Option<&str>, params: Vec<&str>| {
+            let mut entry = history_entry(
+                "123@g.us",
+                id,
+                false,
+                None,
+                wa::Message::default(),
+                Vec::new(),
+                None,
+            );
+            let info = entry.message.as_option_mut().unwrap();
+            info.message = MessageField::none();
+            info.message_stub_type = Some(stub_type);
+            info.participant = actor.map(str::to_owned);
+            info.message_stub_parameters = params.into_iter().map(str::to_owned).collect();
+            entry
+        };
+
+        let parsed = parse_conversation({
+            let mut proto = wa::Conversation::default();
+            proto.id = "123@g.us".into();
+            proto.messages = vec![
+                stub(
+                    "g-add",
+                    StubType::GROUP_PARTICIPANT_ADD,
+                    Some("100@s.whatsapp.net"),
+                    vec![r#"{"jid":"200@lid","pn":"15550002000@s.whatsapp.net","displayName":"Bob"}"#],
+                ),
+                stub(
+                    "g-leave",
+                    StubType::GROUP_PARTICIPANT_LEAVE,
+                    None,
+                    vec!["15550003000@s.whatsapp.net"],
+                ),
+                stub(
+                    "g-remove",
+                    StubType::GROUP_PARTICIPANT_REMOVE,
+                    Some("100@s.whatsapp.net"),
+                    vec!["+15550004000"],
+                ),
+            ];
+            proto
+        });
+
+        assert_eq!(parsed.messages.len(), 3);
+        assert!(matches!(
+            &parsed.messages[0].content,
+            Content::GroupEvent {
+                event: crate::model::GroupEventKind::Added,
+                members,
+            } if parsed.messages[0].sender.as_deref() == Some("100@s.whatsapp.net")
+                && members.len() == 1
+                && members[0].id == "15550002000@s.whatsapp.net"
+                && members[0].name.as_deref() == Some("Bob")
+        ));
+        assert!(matches!(
+            &parsed.messages[1].content,
+            Content::GroupEvent {
+                event: crate::model::GroupEventKind::Left,
+                members,
+            } if parsed.messages[1].sender.is_none()
+                && members.len() == 1
+                && members[0].id == "15550003000@s.whatsapp.net"
+        ));
+        assert!(matches!(
+            &parsed.messages[2].content,
+            Content::GroupEvent {
+                event: crate::model::GroupEventKind::Removed,
+                members,
+            } if members.len() == 1 && members[0].id == "15550004000@s.whatsapp.net"
+        ));
     }
 
     #[test]
@@ -28132,6 +28843,63 @@ mod lottie_sticker_tests {
         assert!(matches!(
             upgraded_wrapped.content,
             Content::Sticker { audio: Some(track), .. } if track.size == 2048
+        ));
+    }
+
+    #[test]
+    fn outgoing_audio_sticker_proto_round_trips_and_quotes() {
+        assert_eq!(
+            sticker_audio_mime_for_path(Path::new("clip.ogg")),
+            "audio/ogg; codecs=opus"
+        );
+        assert_eq!(
+            sticker_audio_mime_for_path(Path::new("clip.OPUS")),
+            "audio/ogg; codecs=opus"
+        );
+        assert_eq!(
+            sticker_audio_mime_for_path(Path::new("clip.mp3")),
+            "audio/mpeg"
+        );
+        assert_eq!(
+            sticker_audio_mime_for_path(Path::new("clip.m4a")),
+            "audio/mp4"
+        );
+        assert_eq!(
+            sticker_audio_mime_for_path(Path::new("clip.wav")),
+            "audio/wav"
+        );
+
+        let mut audio_proto = wa::message::AudioMessage::default();
+        audio_proto.mimetype = Some("audio/mpeg".to_owned());
+        audio_proto.file_length = Some(4321);
+        audio_proto.ptt = Some(false);
+
+        let mut sticker_proto = wa::message::StickerMessage::default();
+        sticker_proto.mimetype = Some("image/webp".to_owned());
+        sticker_proto.file_length = Some(1024);
+        sticker_proto.is_animated = Some(true);
+        sticker_proto.audio = Some(wa::message::sticker_message::Audio::AudioMessage(
+            Box::new(audio_proto),
+        ));
+
+        let mut msg = wa::Message::default();
+        msg.sticker_message = MessageField::some(sticker_proto);
+        let mut ctx = wa::ContextInfo::default();
+        ctx.stanza_id = Some("quoted-1".to_owned());
+        assert!(msg.set_context_info(ctx));
+
+        assert_eq!(
+            sticker_audio_of(msg.get_base_message())
+                .and_then(|audio| audio.file_length),
+            Some(4321)
+        );
+        assert!(matches!(
+            classify(&msg),
+            Some(Content::Sticker {
+                animated: true,
+                audio: Some(track),
+                ..
+            }) if track.mime == "audio/mpeg" && track.size == 4321
         ));
     }
 }

@@ -373,6 +373,7 @@ pub(crate) fn can_select(content: &Content) -> bool {
             | Content::Interactive { .. }
             | Content::Call { .. }
             | Content::DisappearingTimer { .. }
+            | Content::GroupEvent { .. }
     )
 }
 
@@ -690,6 +691,8 @@ pub struct App {
     /// Chat of the clip in the player, whose speed it plays at. Unlike
     /// `voice_chat` it outlives a chat switch, as the clip keeps playing.
     voice_clip_chat: Option<ChatId>,
+    /// Chat whose sticker audio is currently playing (stopped on leaving the chat).
+    sticker_audio_chat: Option<ChatId>,
     /// Next voice message of a run, playing once its download finishes, and
     /// when the download began. Media stays paused for a short while meanwhile.
     voice_wanted: Option<(ChatId, String, Instant)>,
@@ -1714,6 +1717,7 @@ impl App {
             pending_follow: None,
             voice_chat: None,
             voice_clip_chat: None,
+            sticker_audio_chat: None,
             voice_wanted: None,
             recording: None,
             media_hold: None,
@@ -2140,6 +2144,7 @@ impl App {
         self.motion_playing = None;
         self.voice_chat = None;
         self.voice_clip_chat = None;
+        self.sticker_audio_chat = None;
         self.voice_wanted = None;
         self.recording = None;
         self.image_preview = None;
@@ -2996,7 +3001,11 @@ impl App {
             self.dialog = None;
             self.poll_creating = false;
         }
+        if self.sticker_audio_chat.as_deref() == Some(id) {
+            self.stop_sticker_audio();
+        }
         if self.open_chat.as_deref() == Some(id) {
+            self.stop_sticker_audio();
             self.stop_composing(id);
             self.set_open_chat(None);
             self.composer.clear();
@@ -6480,6 +6489,7 @@ impl App {
         }
         self.reset_notification_throttle(&id);
         if self.open_chat.as_deref() != Some(id.as_str()) {
+            self.stop_sticker_audio();
             self.invalidate_composer_undo();
             self.reaction_target = None;
             self.reaction_anchor = None;
@@ -7692,6 +7702,9 @@ impl App {
                 self.dialog = None;
                 self.emoji_start = None;
                 self.mention_start = None;
+                if !opens_chats {
+                    self.stop_sticker_audio();
+                }
                 if opens_chats {
                     // Settings open unfiltered next time.
                     self.settings_search.clear();
@@ -7863,6 +7876,7 @@ impl App {
                 }
             }
             Action::CloseChat => {
+                self.stop_sticker_audio();
                 self.close_info();
                 // A narrow window's Back from a picked call returns to the
                 // call history.
@@ -8028,6 +8042,7 @@ impl App {
                     crate::audio::State::Playing | crate::audio::State::Loading
                 ) {
                     self.player.stop();
+                    self.sticker_audio_chat = None;
                     if self
                         .voice_wanted
                         .as_ref()
@@ -8052,6 +8067,7 @@ impl App {
                         self.video.stop();
                         self.voice_chat = None;
                         self.voice_clip_chat = None;
+                        self.sticker_audio_chat = None;
                         self.voice_wanted = Some((chat, message, Instant::now()));
                     }
                     Some((None, false)) => {
@@ -8059,6 +8075,7 @@ impl App {
                         self.video.stop();
                         self.voice_chat = None;
                         self.voice_clip_chat = None;
+                        self.sticker_audio_chat = None;
                         if let Some(audio) = self.sticker_audio_mut(&chat, &message) {
                             audio.state = MediaState::Downloading;
                         }
@@ -8878,6 +8895,7 @@ impl App {
                 // over one a run is still fetching.
                 self.video.stop();
                 self.voice_wanted = None;
+                self.sticker_audio_chat = None;
                 self.voice_chat = self.open_chat.clone();
                 self.voice_clip_chat = self.open_chat.clone();
                 self.sync_voice_speed();
@@ -8893,6 +8911,7 @@ impl App {
             Action::StopVoice => {
                 self.player.stop();
                 self.voice_chat = None;
+                self.sticker_audio_chat = None;
                 self.voice_wanted = None;
             }
             Action::SetVoiceSpeed(speed) => {
@@ -9232,6 +9251,7 @@ impl App {
                         self.voice_wanted = None;
                         self.voice_chat = None;
                         self.voice_clip_chat = None;
+                        self.sticker_audio_chat = None;
                         self.sticker_audio_preview_wanted =
                             Some((chat.clone(), message.clone(), path));
                         self.backend
@@ -11330,6 +11350,7 @@ impl App {
     fn play_voice(&mut self, message: String, path: PathBuf) {
         self.video.stop();
         self.voice_wanted = None;
+        self.sticker_audio_chat = None;
         self.voice_chat = self.open_chat.clone();
         self.voice_clip_chat = self.open_chat.clone();
         self.sync_voice_speed();
@@ -11356,6 +11377,19 @@ impl App {
         }
     }
 
+    /// Stops any playing chat sticker audio or picker preview without
+    /// interrupting a voice message that plays across chats in `voice_bar`.
+    fn stop_sticker_audio(&mut self) {
+        self.stop_sticker_preview();
+        let was_sticker = self.sticker_audio_chat.take().is_some();
+        if was_sticker && self.voice_clip_chat.is_none() {
+            self.player.stop();
+        }
+        if self.voice_chat.is_none() {
+            self.voice_wanted = None;
+        }
+    }
+
     /// Plays a sticker's embedded audio once at 1x speed, muting any other
     /// playing sticker/voice clip immediately, or mutes it if already active.
     fn play_sticker_audio(&mut self, message: String, path: PathBuf) {
@@ -11363,6 +11397,7 @@ impl App {
         self.voice_wanted = None;
         self.voice_chat = None;
         self.voice_clip_chat = None;
+        self.sticker_audio_chat = None;
         self.player.set_speed(1.0);
         if matches!(
             self.player.status(&message).state,
@@ -11372,7 +11407,13 @@ impl App {
             return;
         }
         self.player.stop();
+        self.sticker_audio_chat = if message.starts_with("picker-sticker:") {
+            None
+        } else {
+            self.open_chat.clone()
+        };
         if let Err(error) = self.player.seek(&message, &path, 0.0) {
+            self.sticker_audio_chat = None;
             self.toast_error(error);
         }
     }
@@ -21043,6 +21084,149 @@ mod tests {
         app.voice_chat = Some(chat.into());
         app.continue_voice("st1");
         assert!(app.actions.is_empty());
+    }
+
+    #[test]
+    fn sticker_audio_stops_when_changing_or_closing_chat() {
+        let directory = tempfile::tempdir().unwrap();
+        let wav_path = directory.path().join("silent.wav");
+        let samples_bytes: u32 = 16_000;
+        let mut wav = Vec::with_capacity(44 + samples_bytes as usize);
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(36 + samples_bytes).to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&8000u32.to_le_bytes());
+        wav.extend_from_slice(&8000u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&8u16.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&samples_bytes.to_le_bytes());
+        wav.resize(44 + samples_bytes as usize, 128);
+        std::fs::write(&wav_path, wav).unwrap();
+
+        let mut app = App::headless(AppDirs::under(directory.path()), Settings::default()).0;
+        let ctx = egui::Context::default();
+        let chat_a = "1@s.whatsapp.net";
+        let chat_b = "2@s.whatsapp.net";
+        app.chats.push(Chat::new(chat_a.into(), "Chat A".into()));
+        app.chats.push(Chat::new(chat_b.into(), "Chat B".into()));
+        app.open_chat = Some(chat_a.into());
+
+        let audio_sticker = |c: &str, id: &str| {
+            let mut row = message(c, id, 1);
+            row.content = Content::Sticker {
+                media: crate::model::Media {
+                    mime: "image/webp".into(),
+                    size: 128,
+                    width: Some(512),
+                    height: Some(512),
+                    album: None,
+                    path: None,
+                    state: MediaState::Idle,
+                },
+                animated: true,
+                audio: Some(crate::model::Media {
+                    mime: "audio/wav".into(),
+                    size: 16_044,
+                    width: None,
+                    height: None,
+                    album: None,
+                    path: Some(wav_path.clone()),
+                    state: MediaState::Idle,
+                }),
+            };
+            row
+        };
+        app.conversations
+            .entry(chat_a.into())
+            .or_default()
+            .merge(vec![audio_sticker(chat_a, "st1"), voice(chat_a, "v1", 2, Some(wav_path.to_str().unwrap()))], false);
+        app.conversations
+            .entry(chat_b.into())
+            .or_default()
+            .merge(vec![audio_sticker(chat_b, "st2")], false);
+
+        // 1. Play in chat A -> tracked under sticker_audio_chat; switch to chat B -> stops.
+        app.apply(
+            Action::ToggleStickerAudio {
+                chat: chat_a.into(),
+                message: "st1".into(),
+            },
+            &ctx,
+        );
+        assert_eq!(app.sticker_audio_chat.as_deref(), Some(chat_a));
+        assert!(matches!(
+            app.player.status("st1").state,
+            crate::audio::State::Loading | crate::audio::State::Playing
+        ));
+
+        app.apply(Action::OpenChat(chat_b.into()), &ctx);
+        assert!(app.sticker_audio_chat.is_none());
+        assert_eq!(app.player.status("st1").state, crate::audio::State::Idle);
+        assert!(app.player.current().is_none());
+
+        // 2. Play in chat B -> CloseChat -> stops.
+        app.apply(
+            Action::ToggleStickerAudio {
+                chat: chat_b.into(),
+                message: "st2".into(),
+            },
+            &ctx,
+        );
+        assert_eq!(app.sticker_audio_chat.as_deref(), Some(chat_b));
+        assert!(matches!(
+            app.player.status("st2").state,
+            crate::audio::State::Loading | crate::audio::State::Playing
+        ));
+        app.apply(Action::CloseChat, &ctx);
+        assert!(app.sticker_audio_chat.is_none());
+        assert_eq!(app.player.status("st2").state, crate::audio::State::Idle);
+        assert!(app.player.current().is_none());
+
+        // 3. Play in chat B -> leave Chats page (Settings) -> stops.
+        app.apply(Action::OpenChat(chat_b.into()), &ctx);
+        app.apply(
+            Action::ToggleStickerAudio {
+                chat: chat_b.into(),
+                message: "st2".into(),
+            },
+            &ctx,
+        );
+        assert_eq!(app.sticker_audio_chat.as_deref(), Some(chat_b));
+        assert!(matches!(
+            app.player.status("st2").state,
+            crate::audio::State::Loading | crate::audio::State::Playing
+        ));
+        app.apply(Action::Open(Page::Settings), &ctx);
+        assert!(app.sticker_audio_chat.is_none());
+        assert_eq!(app.player.status("st2").state, crate::audio::State::Idle);
+        assert!(app.player.current().is_none());
+
+        // 4. Playing a voice message in chat A continues when switching to chat B (`voice_bar`).
+        app.apply(Action::Open(Page::Chats), &ctx);
+        app.apply(Action::OpenChat(chat_a.into()), &ctx);
+        app.apply(
+            Action::PlayVoice {
+                message: "v1".into(),
+                path: wav_path.clone(),
+            },
+            &ctx,
+        );
+        assert_eq!(app.voice_clip_chat.as_deref(), Some(chat_a));
+        assert!(app.sticker_audio_chat.is_none());
+        assert!(matches!(
+            app.player.status("v1").state,
+            crate::audio::State::Loading | crate::audio::State::Playing
+        ));
+        app.apply(Action::OpenChat(chat_b.into()), &ctx);
+        assert_eq!(app.voice_clip_chat.as_deref(), Some(chat_a));
+        assert!(matches!(
+            app.player.status("v1").state,
+            crate::audio::State::Loading | crate::audio::State::Playing
+        ));
     }
 
     #[test]
