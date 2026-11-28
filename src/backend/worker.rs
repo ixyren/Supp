@@ -1040,6 +1040,7 @@ pub async fn run(
         group_info_tries: HashMap::new(),
         group_info_retry: Vec::new(),
         presence_subscribed: HashSet::new(),
+        group_events_sync_requested: HashSet::new(),
         download_folder: None,
         cleaned_download_folders: HashSet::new(),
         keep_chats_archived: true,
@@ -1619,6 +1620,8 @@ struct Worker {
     /// Next retry time for failed group metadata requests.
     group_info_retry: Vec<(Instant, String)>,
     presence_subscribed: HashSet<String>,
+    /// Groups whose one-time recent history backfill for group membership notices was triggered this session.
+    group_events_sync_requested: HashSet<ChatId>,
     /// Chosen folder for new downloads, when not the cache.
     download_folder: Option<PathBuf>,
     /// Clean each chosen root once, before this worker can start downloads there.
@@ -4249,6 +4252,7 @@ impl Worker {
                 self.fetch_blocklist();
                 self.retry_message_removals();
                 // A new connection may reach a phone that was away before.
+                self.group_events_sync_requested.clear();
                 self.older_warned.clear();
                 self.refresh_legacy_preferences();
                 self.retry_avatars();
@@ -4475,7 +4479,7 @@ impl Worker {
                                 .or(update.participant.as_ref());
                             let actor =
                                 raw_actor.map(|jid| self.canonical(jid)).unwrap_or_default();
-                            let from_me = !actor.is_empty() && actor == self.me();
+                            let from_me = !actor.is_empty() && self.is_me(&actor);
                             // Two notifications without an id must not share a
                             // key: the fallback carries the timestamp, action,
                             // actor and duration that tell them apart. The key
@@ -4821,6 +4825,7 @@ impl Worker {
         self.group_info_tries.clear();
         self.group_info_retry.clear();
         self.presence_subscribed.clear();
+        self.group_events_sync_requested.clear();
         self.read_sync = ReadSync::default();
         self.favorite_chats = Default::default();
         self.poll_sending.clear();
@@ -6582,6 +6587,7 @@ impl Worker {
                     secrets.insert(message.id.clone(), secret.to_vec());
                 }
             }
+            let mut new_group_events: Vec<Message> = Vec::new();
             for mut message in chat.messages {
                 if self.message_was_removed(&id, &message.id) {
                     removed += 1;
@@ -6766,6 +6772,9 @@ impl Worker {
                     if live_location_changed || status_advanced {
                         self.emit_message(&id, &row.id);
                     }
+                    if !existed && matches!(row.content, Content::GroupEvent { .. }) {
+                        new_group_events.push(row.clone());
+                    }
                     self.retire_local_call_twins(&row);
                     if existed {
                         repeated += 1;
@@ -6895,6 +6904,22 @@ impl Worker {
                 // The phone holds nothing older (or will not share it): later
                 // sessions skip asking instead of waiting out a silent phone.
                 let _ = self.archive.set_history_start(&id);
+            }
+            if !new_group_events.is_empty() {
+                for notice in &mut new_group_events {
+                    self.polish(notice);
+                }
+                self.emit(Event::Messages {
+                    chat: id.clone(),
+                    messages: new_group_events,
+                    older: false,
+                    complete: false,
+                });
+            }
+            if ChatKind::from_id(&id) == ChatKind::Group {
+                let _ = self
+                    .archive
+                    .set_meta(&format!("group_events_sync_v1:{id}"), "done");
             }
             filed.push((id, count, chat.more_on_phone));
         }
@@ -10382,6 +10407,7 @@ impl Worker {
         if before.is_none() && ChatKind::from_id(&chat) == ChatKind::Group {
             // Force group metadata when opening a group.
             self.request_group_info(&chat, false);
+            self.maybe_backfill_group_events(&chat);
         }
         if before.is_none()
             && ChatKind::from_id(&chat) == ChatKind::Direct
@@ -10395,6 +10421,44 @@ impl Worker {
                 }
             });
         }
+    }
+
+    /// Triggers a one-time background history request for a group so older
+    /// join/leave/admin stubs missing from pre-v2.0.8 syncs arrive automatically.
+    fn maybe_backfill_group_events(&mut self, chat: &str) {
+        if ChatKind::from_id(chat) != ChatKind::Group {
+            return;
+        }
+        let meta_key = format!("group_events_sync_v1:{chat}");
+        if self
+            .archive
+            .meta(&meta_key)
+            .ok()
+            .flatten()
+            .as_deref()
+            == Some("done")
+        {
+            return;
+        }
+        if !self.group_events_sync_requested.insert(chat.to_owned()) {
+            return;
+        }
+        let (Some(client), Some(jid)) = (self.client.clone(), Self::jid_of(chat)) else {
+            self.group_events_sync_requested.remove(chat);
+            return;
+        };
+        let (id, from_me, timestamp) = match self.newest_on_phone(chat) {
+            Ok(Some(newest)) => (newest.id, newest.from_me, newest.timestamp),
+            _ => (String::new(), false, crate::util::now()),
+        };
+        tokio::spawn(async move {
+            if let Err(error) = client
+                .fetch_message_history(&jid, &id, from_me, timestamp, PHONE_BATCH)
+                .await
+            {
+                log::debug!("group membership history backfill not requested: {error}");
+            }
+        });
     }
 
     fn download(&mut self, chat: ChatId, id: String) {
@@ -12073,7 +12137,7 @@ impl Worker {
             .as_ref()
             .or(update.participant.as_ref());
         let actor = raw_actor.map(|jid| self.canonical(jid)).unwrap_or_default();
-        let from_me = !actor.is_empty() && actor == self.me();
+        let from_me = !actor.is_empty() && self.is_me(&actor);
 
         let mut collect_members = |participants: &[GroupParticipantInfo]| -> Vec<GroupMemberRef> {
             let mut seen = HashSet::new();
@@ -14914,8 +14978,17 @@ fn parse_stub_member(param: &str) -> Option<crate::model::GroupMemberRef> {
     }
     if trimmed.starts_with('{') {
         let value: serde_json::Value = serde_json::from_str(trimmed).ok()?;
-        let id = ["pn", "phone_number", "jid", "lid"]
-            .into_iter()
+        let id = [
+            "pn",
+            "pn_jid",
+            "phone_number",
+            "jid",
+            "userJid",
+            "user_jid",
+            "participant",
+            "lid",
+        ]
+        .into_iter()
             .find_map(|key| {
                 value
                     .get(key)
@@ -15044,8 +15117,41 @@ fn parse_conversation(conversation: wa::Conversation) -> ParsedChat {
             diagnostics.missing_key += 1;
             continue;
         };
+        if let Some(content) = group_event_stub(info) {
+            let from_me = key.from_me.unwrap_or(false);
+            let timestamp = info.message_timestamp.unwrap_or(0) as i64;
+            newest = newest.max(timestamp);
+            messages.push(ParsedMessage {
+                id,
+                sender: info
+                    .participant
+                    .clone()
+                    .filter(|sender| !sender.trim().is_empty())
+                    .or_else(|| key.participant.clone()),
+                from_me,
+                push_name: None,
+                timestamp,
+                history_order: entry
+                    .msg_order_id
+                    .and_then(|order| i64::try_from(order).ok()),
+                edited: false,
+                content,
+                status: Delivery::None,
+                quoted: None,
+                reactions: Vec::new(),
+                mentions: Vec::new(),
+                forwarded: false,
+                thumbnail: None,
+                raw: Vec::new(),
+                poll_secret: None,
+                poll_votes: Vec::new(),
+                receipts: Vec::new(),
+                sealed_edit: None,
+            });
+            continue;
+        }
         let Some(original) = info.message.as_option() else {
-            // A missed call or group membership notice the phone filed as a bare notice.
+            // A missed call the phone filed as a bare notice.
             if let Some(content) = info.message_stub_type.and_then(calls::missed_call_stub) {
                 let from_me = key.from_me.unwrap_or(false);
                 let timestamp = info.message_timestamp.unwrap_or(0) as i64;
@@ -15053,39 +15159,6 @@ fn parse_conversation(conversation: wa::Conversation) -> ParsedChat {
                 messages.push(ParsedMessage {
                     id,
                     sender: key.participant.clone().or_else(|| key.remote_jid.clone()),
-                    from_me,
-                    push_name: None,
-                    timestamp,
-                    history_order: entry
-                        .msg_order_id
-                        .and_then(|order| i64::try_from(order).ok()),
-                    edited: false,
-                    content,
-                    status: Delivery::None,
-                    quoted: None,
-                    reactions: Vec::new(),
-                    mentions: Vec::new(),
-                    forwarded: false,
-                    thumbnail: None,
-                    raw: Vec::new(),
-                    poll_secret: None,
-                    poll_votes: Vec::new(),
-                    receipts: Vec::new(),
-                    sealed_edit: None,
-                });
-                continue;
-            }
-            if let Some(content) = group_event_stub(info) {
-                let from_me = key.from_me.unwrap_or(false);
-                let timestamp = info.message_timestamp.unwrap_or(0) as i64;
-                newest = newest.max(timestamp);
-                messages.push(ParsedMessage {
-                    id,
-                    sender: info
-                        .participant
-                        .clone()
-                        .filter(|sender| !sender.trim().is_empty())
-                        .or_else(|| key.participant.clone()),
                     from_me,
                     push_name: None,
                     timestamp,
@@ -21270,6 +21343,7 @@ mod receipt_tests {
             group_info_tries: HashMap::new(),
             group_info_retry: Vec::new(),
             presence_subscribed: HashSet::new(),
+            group_events_sync_requested: HashSet::new(),
             download_folder: None,
             cleaned_download_folders: HashSet::new(),
             keep_chats_archived: true,
@@ -22008,11 +22082,22 @@ mod receipt_tests {
                     Some("100@s.whatsapp.net"),
                     vec!["+15550004000"],
                 ),
+                {
+                    let mut entry = stub(
+                        "g-leave-with-empty-msg",
+                        StubType::GROUP_PARTICIPANT_LEAVE,
+                        None,
+                        vec![r#"{"pn_jid":"15550005000@s.whatsapp.net"}"#],
+                    );
+                    entry.message.as_option_mut().unwrap().message =
+                        MessageField::some(wa::Message::default());
+                    entry
+                },
             ];
             proto
         });
 
-        assert_eq!(parsed.messages.len(), 3);
+        assert_eq!(parsed.messages.len(), 4);
         assert!(matches!(
             &parsed.messages[0].content,
             Content::GroupEvent {
@@ -22039,6 +22124,63 @@ mod receipt_tests {
                 members,
             } if members.len() == 1 && members[0].id == "15550004000@s.whatsapp.net"
         ));
+        assert!(matches!(
+            &parsed.messages[3].content,
+            Content::GroupEvent {
+                event: crate::model::GroupEventKind::Left,
+                members,
+            } if members.len() == 1 && members[0].id == "15550005000@s.whatsapp.net"
+        ));
+    }
+
+    #[test]
+    fn file_history_emits_new_group_events_and_marks_group_synced() {
+        let (mut worker, events, _inbox, _wa) = worker();
+        let group = "123-emit@g.us";
+        let mut info = wa::WebMessageInfo::default();
+        info.key = MessageField::some({
+            let mut key = wa::MessageKey::default();
+            key.remote_jid = Some(group.into());
+            key.id = Some("hist-left-1".into());
+            key
+        });
+        info.message_timestamp = Some(500);
+        info.message_stub_type = Some(wa::web_message_info::StubType::GROUP_PARTICIPANT_LEAVE);
+        info.message_stub_parameters = vec!["15550009000@s.whatsapp.net".into()];
+        let mut entry = wa::HistorySyncMsg::default();
+        entry.message = MessageField::some(info);
+        entry.msg_order_id = Some(1);
+        let chat_proto = {
+            let mut proto = wa::Conversation::default();
+            proto.id = group.into();
+            proto.messages = vec![entry];
+            proto
+        };
+        let parsed = ParsedHistory {
+            chats: vec![parse_conversation(chat_proto)],
+            push_names: Vec::new(),
+            lids: Vec::new(),
+            stickers: Vec::new(),
+        };
+        worker.file_history(parsed, false);
+
+        assert!(events.try_iter().any(|ev| matches!(
+            ev,
+            Event::Messages { chat, messages, .. }
+            if chat == group && matches!(
+                messages.as_slice(),
+                [m] if m.id == "hist-left-1"
+                    && matches!(m.content, Content::GroupEvent { event: crate::model::GroupEventKind::Left, .. })
+            )
+        )));
+        assert_eq!(
+            worker
+                .archive
+                .meta(&format!("group_events_sync_v1:{group}"))
+                .unwrap()
+                .as_deref(),
+            Some("done")
+        );
     }
 
     #[test]

@@ -5004,8 +5004,25 @@ fn format_group_event(
     let single_target_is_me = members.len() == 1 && target_is_me(&members[0].id);
     let plural = targets.len() > 1;
     let joined = join_member_names(locale, &targets);
+    let effective_kind = match kind {
+        GroupEventKind::Added
+            if members.len() == 1
+                && !message.sender.is_empty()
+                && message.sender == members[0].id =>
+        {
+            GroupEventKind::Joined
+        }
+        GroupEventKind::Removed
+            if members.len() == 1
+                && !message.sender.is_empty()
+                && message.sender == members[0].id =>
+        {
+            GroupEventKind::Left
+        }
+        other => other,
+    };
 
-    match kind {
+    match effective_kind {
         GroupEventKind::Added => {
             if let Some(actor_name) = actor {
                 if actor_is_me && !targets.is_empty() {
@@ -12929,6 +12946,12 @@ mod tests {
             assert_eq!(
                 format_group_event(&english, &msg, GroupEventKind::Removed, &me_removed),
                 "~Carlos removed you"
+            );
+            msg.sender = "2@s.whatsapp.net".into();
+            msg.sender_name = Some("Ana".into());
+            assert_eq!(
+                format_group_event(&spanish, &msg, GroupEventKind::Added, &one_left),
+                "~Ana se unió al grupo"
             );
 
             let text = message(Content::text("Hola"));
