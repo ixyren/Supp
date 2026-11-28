@@ -17,7 +17,7 @@ struct Cli {
     verbose: bool,
     /// Start in the tray without opening a window, when the tray is available
     /// and ZapFast keeps running in the background. For login autostart.
-    #[arg(long)]
+    #[arg(long, alias = "minimized", alias = "hidden")]
     start_hidden: bool,
 
     /// Start with offline sample chats.
@@ -962,9 +962,11 @@ mod target_cli_tests {
     fn a_launch_without_a_target_still_parses() {
         let cli = Cli::try_parse_from(["supp"]).unwrap();
         assert!(cli.target.is_none());
-        let cli = Cli::try_parse_from(["supp", "--start-hidden"]).unwrap();
-        assert!(cli.start_hidden);
-        assert!(cli.target.is_none());
+        for flag in ["--start-hidden", "--minimized", "--hidden"] {
+            let cli = Cli::try_parse_from(["supp", flag]).unwrap();
+            assert!(cli.start_hidden, "{flag} should set start_hidden");
+            assert!(cli.target.is_none());
+        }
     }
 
     /// A link asked to be seen: `--start-hidden` with a chat to open must not

@@ -3439,8 +3439,11 @@ pub enum Action {
         kind: crate::privacy::PrivacyKind,
         choice: crate::privacy::PrivacyChoice,
     },
-    /// Registers or removes the login entry that starts ZapFast in the tray.
+    /// Registers or removes the login entry that starts Supp with the system.
     SetStartWithSystem(bool),
+    /// Whether login autostart opens Supp minimized in the tray (`true`) or
+    /// with its window (`false`).
+    SetStartWithSystemHidden(bool),
     /// Sets the sound for mentions and replies to us (`true`) or for
     /// other new messages.
     SetNotificationSound {

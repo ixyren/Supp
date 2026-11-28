@@ -8,7 +8,7 @@
 
 use std::sync::mpsc::{Receiver, TryRecvError};
 
-use fastframe_autostart::{Autostart, Start, State};
+pub use fastframe_autostart::{Autostart, Start, State};
 
 fn autostart() -> Autostart {
     Autostart::new("supp", "Supp")
@@ -31,12 +31,15 @@ pub struct LoginItem {
 }
 
 impl LoginItem {
-    /// Reads the login item, after moving an older macOS registration over.
+    /// Reads the login item, after moving an older macOS registration over
+    /// or repairing a legacy Windows `--minimized` Run entry.
     pub fn read(&mut self, wake: impl Fn() + Send + 'static) {
         self.spawn(
             move || {
                 #[cfg(target_os = "macos")]
                 move_launch_agent();
+                #[cfg(windows)]
+                repair_legacy_windows_run();
                 Outcome {
                     state: Ok(autostart().state()),
                     changed: false,
@@ -46,12 +49,12 @@ impl LoginItem {
         );
     }
 
-    /// Starts ZapFast in the tray at login, or not at all.
-    pub fn set(&mut self, enabled: bool, wake: impl Fn() + Send + 'static) {
+    /// Starts Supp at login (with a window or in the tray), or not at all.
+    pub fn set(&mut self, start: Option<Start>, wake: impl Fn() + Send + 'static) {
         self.spawn(
             move || Outcome {
                 state: autostart()
-                    .set(enabled.then_some(Start::Hidden))
+                    .set(start)
                     .map_err(|error| error.to_string()),
                 changed: true,
             },
@@ -96,10 +99,114 @@ impl LoginItem {
 /// Whether Settings offers the switch, and where it stands: `None` where this
 /// installation cannot start at login.
 pub fn switch(state: State) -> Option<bool> {
+    state_parts(state).map(|(enabled, _)| enabled)
+}
+
+/// Breaks [`State`] into `(enabled, minimized_in_tray)`, or `None` when
+/// unsupported on this installation.
+pub fn state_parts(state: State) -> Option<(bool, bool)> {
     match state {
         State::Unsupported => None,
-        State::Off => Some(false),
-        State::On(_) | State::NeedsApproval(_) => Some(true),
+        State::Off => Some((false, false)),
+        State::On(Start::Window) | State::NeedsApproval(Start::Window) => Some((true, false)),
+        State::On(Start::Hidden) | State::NeedsApproval(Start::Hidden) => Some((true, true)),
+    }
+}
+
+/// Whether a stored Windows `Run\Supp` command should be rewritten to the
+/// current installed `supp.exe` without the legacy `--minimized` flag.
+#[cfg_attr(not(any(windows, test)), allow(dead_code))]
+fn needs_windows_run_repair(command: &str, current_exe: &str) -> bool {
+    let trimmed = command.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let current_lower = current_exe.to_ascii_lowercase();
+    let installed_binary =
+        current_lower.ends_with("supp.exe") && !current_lower.contains(r"\target\");
+    if !installed_binary {
+        return false;
+    }
+    let has_legacy_minimized = trimmed
+        .split_whitespace()
+        .any(|arg| arg.trim_matches('"').eq_ignore_ascii_case("--minimized"));
+    if has_legacy_minimized {
+        return true;
+    }
+    // Unquoted executable or pointing to a stale path that no longer exists.
+    if !trimmed.starts_with('"') {
+        return true;
+    }
+    if let Some((exe, _)) = trimmed[1..].split_once('"') {
+        let exe_clean = exe.strip_prefix(r"\\?\").unwrap_or(exe);
+        let cur_clean = current_exe.strip_prefix(r"\\?\").unwrap_or(current_exe);
+        if !exe_clean.eq_ignore_ascii_case(cur_clean) {
+            return true;
+        }
+    }
+    false
+}
+
+#[cfg(windows)]
+fn repair_legacy_windows_run() {
+    use windows_sys::Win32::Foundation::ERROR_SUCCESS;
+    use windows_sys::Win32::System::Registry::{
+        HKEY_CURRENT_USER, RRF_RT_REG_SZ, RegGetValueW,
+    };
+
+    if matches!(autostart().state(), State::Unsupported | State::Off) {
+        return;
+    }
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let exe_str = exe.to_string_lossy();
+    let key: Vec<u16> = r"Software\Microsoft\Windows\CurrentVersion\Run"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let value: Vec<u16> = "Supp".encode_utf16().chain(std::iter::once(0)).collect();
+    let mut size = 0u32;
+    // SAFETY: NUL-terminated UTF-16 strings; null buffer queries required size.
+    let status = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            key.as_ptr(),
+            value.as_ptr(),
+            RRF_RT_REG_SZ,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut size,
+        )
+    };
+    if status != ERROR_SUCCESS || size == 0 {
+        return;
+    }
+    let mut bytes = vec![0u8; size as usize];
+    // SAFETY: `bytes` is allocated with `size` bytes and valid for the call.
+    let status = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            key.as_ptr(),
+            value.as_ptr(),
+            RRF_RT_REG_SZ,
+            std::ptr::null_mut(),
+            bytes.as_mut_ptr().cast(),
+            &mut size,
+        )
+    };
+    if status != ERROR_SUCCESS {
+        return;
+    }
+    bytes.truncate(size as usize);
+    let units: Vec<u16> = bytes
+        .chunks_exact(2)
+        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+        .take_while(|&u| u != 0)
+        .collect();
+    let command = String::from_utf16_lossy(&units);
+    if needs_windows_run_repair(&command, &exe_str) {
+        let _ = autostart().set(Some(Start::Window));
     }
 }
 
@@ -136,5 +243,52 @@ mod tests {
         assert_eq!(switch(State::On(Start::Hidden)), Some(true));
         assert_eq!(switch(State::NeedsApproval(Start::Hidden)), Some(true));
         assert_eq!(switch(State::On(Start::Window)), Some(true));
+
+        assert_eq!(state_parts(State::Unsupported), None);
+        assert_eq!(state_parts(State::Off), Some((false, false)));
+        assert_eq!(state_parts(State::On(Start::Window)), Some((true, false)));
+        assert_eq!(state_parts(State::On(Start::Hidden)), Some((true, true)));
+        assert_eq!(
+            state_parts(State::NeedsApproval(Start::Window)),
+            Some((true, false))
+        );
+        assert_eq!(
+            state_parts(State::NeedsApproval(Start::Hidden)),
+            Some((true, true))
+        );
+    }
+
+    #[test]
+    fn detects_legacy_or_unquoted_windows_run_commands() {
+        let installed = r"C:\Users\Javier\AppData\Local\Supp\supp.exe";
+        assert!(needs_windows_run_repair(
+            r"C:\Users\Javier\AppData\Local\Supp\supp.exe --minimized",
+            installed,
+        ));
+        assert!(needs_windows_run_repair(
+            r#""C:\Users\Javier\AppData\Local\Supp\supp.exe" --minimized"#,
+            installed,
+        ));
+        assert!(needs_windows_run_repair(
+            r"C:\Users\Javier\AppData\Local\Supp\supp.exe",
+            installed,
+        ));
+        assert!(needs_windows_run_repair(
+            r#""C:\OldFolder\supp.exe""#,
+            installed,
+        ));
+        assert!(!needs_windows_run_repair(
+            r#""C:\Users\Javier\AppData\Local\Supp\supp.exe""#,
+            installed,
+        ));
+        assert!(!needs_windows_run_repair(
+            r#""C:\Users\Javier\AppData\Local\Supp\supp.exe" --start-hidden"#,
+            installed,
+        ));
+        // Dev/test builds under \target\ must never touch the user's Run key.
+        assert!(!needs_windows_run_repair(
+            r"C:\Users\Javier\AppData\Local\Supp\supp.exe --minimized",
+            r"C:\repo\target\debug\deps\supp.exe",
+        ));
     }
 }

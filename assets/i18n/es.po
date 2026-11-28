@@ -1813,11 +1813,20 @@ msgstr "Sal desde la bandeja del sistema o con Ctrl+Q."
 
 #: src/ui/settings.rs:676 src/ui/settings.rs:684
 msgid "Start at login"
-msgstr "Iniciar al iniciar sesión"
+msgstr "Iniciar al encender el PC"
 
 #: src/ui/settings.rs:677
 msgid "Starts in the tray, without a window."
 msgstr "Se inicia en la bandeja del sistema, sin ventana."
+
+msgid "Opens Supp automatically when you sign in."
+msgstr "Abre Supp automáticamente al encender el PC e iniciar sesión."
+
+msgid "Start minimized in the tray"
+msgstr "Iniciar minimizado en la bandeja"
+
+msgid "Starts in the tray without opening the window."
+msgstr "Se inicia en la bandeja del sistema sin abrir la ventana."
 
 #: src/ui/settings.rs:700
 msgid "Check for updates"

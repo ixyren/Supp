@@ -809,7 +809,7 @@ fn sections(app: &App) -> Vec<Section> {
     if app.start_with_system.is_some() {
         system.row(
             translated(locale, "Start at login"),
-            translated(locale, "Starts in the tray, without a window."),
+            translated(locale, "Opens Supp automatically when you sign in."),
             move |ui, app| {
                 let Some(mut enabled) = app.start_with_system else {
                     return;
@@ -830,6 +830,29 @@ fn sections(app: &App) -> Vec<Section> {
                 }
             },
         );
+        if app.start_with_system == Some(true) {
+            system.row(
+                translated(locale, "Start minimized in the tray"),
+                translated(locale, "Starts in the tray without opening the window."),
+                move |ui, app| {
+                    let mut hidden = app.start_with_system_hidden;
+                    let response = widgets::switch(ui, &palette, &mut hidden);
+                    theme::reveal_focus(&response);
+                    let label = crate::i18n::gettext(app.locale, "Start minimized in the tray");
+                    response.widget_info(|| {
+                        egui::WidgetInfo::selected(
+                            egui::WidgetType::Checkbox,
+                            ui.is_enabled(),
+                            hidden,
+                            label.as_ref(),
+                        )
+                    });
+                    if response.changed() {
+                        app.actions.push(Action::SetStartWithSystemHidden(hidden));
+                    }
+                },
+            );
+        }
     }
     system.toggle(
         translated(locale, "Check for updates"),

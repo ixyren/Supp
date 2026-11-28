@@ -12,7 +12,7 @@ ManifestDPIAware true
 
 !define APP_NAME "Supp"
 !define APP_EXE "supp.exe"
-!define APP_VERSION "2.0.9"
+!define APP_VERSION "2.0.10"
 !define APP_PUBLISHER "ixyren"
 !define APP_URL "https://github.com/ixyren/Supp"
 !define UNINSTALL_REG_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\Supp"
@@ -22,7 +22,7 @@ OutFile "..\..\dist\Supp_${APP_VERSION}_x64-setup.exe"
 InstallDir "$LOCALAPPDATA\Supp"
 InstallDirRegKey HKCU "${UNINSTALL_REG_KEY}" "InstallLocation"
 
-VIProductVersion "2.0.9.0"
+VIProductVersion "2.0.10.0"
 VIAddVersionKey "ProductName" "${APP_NAME}"
 VIAddVersionKey "CompanyName" "${APP_PUBLISHER}"
 VIAddVersionKey "FileDescription" "Instalador de ${APP_NAME} (Nativo en Rust)"
@@ -97,6 +97,13 @@ Section "Supp" SecMain
   ${GetSize} "$INSTDIR" "/S=0K" $0 $1 $2
   IntFmt $0 "0x%08X" $0
   WriteRegDWORD HKCU "${UNINSTALL_REG_KEY}" "EstimatedSize" "$0"
+
+  ; Repair a broken legacy Windows Run entry if present from older installs
+  ReadRegStr $0 HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${APP_NAME}"
+  ${If} $0 == "$INSTDIR\${APP_EXE} --minimized"
+  ${OrIf} $0 == '"$INSTDIR\${APP_EXE}" --minimized'
+    WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${APP_NAME}" '"$INSTDIR\${APP_EXE}"'
+  ${EndIf}
 SectionEnd
 
 Section "Uninstall"
@@ -119,4 +126,6 @@ Section "Uninstall"
   Delete "$DESKTOP\${APP_NAME}.lnk"
 
   DeleteRegKey HKCU "${UNINSTALL_REG_KEY}"
+  DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${APP_NAME}"
+  DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run" "${APP_NAME}"
 SectionEnd

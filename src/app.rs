@@ -941,8 +941,10 @@ pub struct App {
     /// texture each is drawn through.
     pub call_member_frames: HashMap<String, std::sync::Arc<egui::ColorImage>>,
     pub call_member_textures: HashMap<String, CallTexture>,
-    /// Whether ZapFast starts at login, when this installation supports it.
+    /// Whether Supp starts at login, when this installation supports it.
     pub start_with_system: Option<bool>,
+    /// Whether login autostart opens Supp minimized in the tray.
+    pub start_with_system_hidden: bool,
     /// The read or change of the login item running on its thread.
     login_item: crate::autostart::LoginItem,
     /// Cross-thread window repaint handle.
@@ -1827,6 +1829,7 @@ impl App {
             call_member_frames: HashMap::new(),
             call_member_textures: HashMap::new(),
             start_with_system: None,
+            start_with_system_hidden: false,
             login_item: Default::default(),
             waker,
             tray: None,
@@ -10310,8 +10313,34 @@ impl App {
                 }
             }
             Action::SetStartWithSystem(enabled) => {
+                self.start_with_system = Some(enabled);
+                if !enabled {
+                    self.start_with_system_hidden = false;
+                }
+                let start = enabled.then_some(if self.start_with_system_hidden {
+                    crate::autostart::Start::Hidden
+                } else {
+                    crate::autostart::Start::Window
+                });
                 let waker = self.waker.clone();
-                self.login_item.set(enabled, move || waker.wake());
+                self.login_item.set(start, move || waker.wake());
+            }
+            Action::SetStartWithSystemHidden(hidden) => {
+                self.start_with_system_hidden = hidden;
+                if hidden && !self.settings.keep_running_in_background {
+                    self.settings.keep_running_in_background = true;
+                    self.mark_settings_dirty();
+                    self.spawn_tray_if_wanted();
+                }
+                if self.start_with_system == Some(true) {
+                    let start = if hidden {
+                        crate::autostart::Start::Hidden
+                    } else {
+                        crate::autostart::Start::Window
+                    };
+                    let waker = self.waker.clone();
+                    self.login_item.set(Some(start), move || waker.wake());
+                }
             }
             Action::ZoomBy(delta) => {
                 self.settings.zoom = (self.settings.zoom + delta).clamp(0.6, 2.0);
@@ -10935,7 +10964,16 @@ impl App {
         };
         match outcome.state {
             Ok(state) => {
-                self.start_with_system = crate::autostart::switch(state);
+                match crate::autostart::state_parts(state) {
+                    Some((enabled, hidden)) => {
+                        self.start_with_system = Some(enabled);
+                        self.start_with_system_hidden = hidden;
+                    }
+                    None => {
+                        self.start_with_system = None;
+                        self.start_with_system_hidden = false;
+                    }
+                }
                 if outcome.changed && matches!(state, fastframe_autostart::State::NeedsApproval(_))
                 {
                     self.toast("Allow Supp in System Settings, under Login Items.");
@@ -21227,6 +21265,20 @@ mod tests {
             app.player.status("v1").state,
             crate::audio::State::Loading | crate::audio::State::Playing
         ));
+    }
+
+    #[test]
+    fn start_with_system_hidden_enables_background_tray() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut settings = Settings::default();
+        settings.keep_running_in_background = false;
+        let mut app = App::headless(AppDirs::under(directory.path()), settings).0;
+        app.start_with_system = Some(false);
+        let ctx = egui::Context::default();
+
+        app.apply(Action::SetStartWithSystemHidden(true), &ctx);
+        assert!(app.start_with_system_hidden);
+        assert!(app.settings.keep_running_in_background);
     }
 
     #[test]
